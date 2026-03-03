@@ -1,9 +1,9 @@
 import { useState } from "react"
+import { Link } from "react-router-dom"
 import {
   ComposableMap,
   Geographies,
   Geography,
-  ZoomableGroup,
 } from "react-simple-maps"
 import { charityCareData, type CharityCareState } from "@/data/charityCare"
 import { fipsToState } from "@/data/fips"
@@ -18,10 +18,10 @@ const ALL_STATES = Object.values(charityCareData).sort((a, b) =>
 function getStateColor(st: CharityCareState | undefined): string {
   if (!st) return "#D1D5DB"
   if (st.hasMandatoryCharityCare && st.fplThreshold && st.fplThreshold >= 300)
-    return "#16A34A" // strong: green-600
+    return "#6EE7A0" // strong: muted green
   if (st.hasMandatoryCharityCare)
-    return "#60A5FA" // moderate: blue-400
-  return "#F87171" // no mandate: red-400
+    return "#FDE68A" // moderate: muted yellow
+  return "#FCA5A5" // no mandate: muted red
 }
 
 export default function CharityCare() {
@@ -46,15 +46,15 @@ export default function CharityCare() {
       {/* Legend */}
       <div className="flex justify-center gap-6 mb-6 text-sm">
         <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm bg-green-600" />
+          <span className="w-3 h-3 rounded-sm bg-green-300" />
           Strong (≥300% FPL)
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm bg-blue-400" />
+          <span className="w-3 h-3 rounded-sm bg-yellow-200" />
           Moderate mandate
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm bg-red-400" />
+          <span className="w-3 h-3 rounded-sm bg-red-300" />
           Federal only
         </div>
       </div>
@@ -80,7 +80,7 @@ export default function CharityCare() {
         {/* Map (hidden on small screens) */}
         <div className="hidden lg:block lg:col-span-3">
           <ComposableMap projection="geoAlbersUsa" width={800} height={500}>
-            <ZoomableGroup>
+            <g>
               <Geographies geography={GEO_URL}>
                 {({ geographies }) =>
                   geographies.map((geo) => {
@@ -122,7 +122,7 @@ export default function CharityCare() {
                   })
                 }
               </Geographies>
-            </ZoomableGroup>
+            </g>
           </ComposableMap>
         </div>
 
@@ -196,22 +196,46 @@ export default function CharityCare() {
               <h3 className="font-semibold text-sm mb-2">What To Do Next</h3>
               <ol className="text-sm space-y-1 list-decimal list-inside mb-4">
                 <li>Ask the hospital for their Financial Assistance Policy</li>
-                <li>Complete the financial assistance application</li>
-                <li>Do NOT pay or sign anything until you hear back</li>
+                <li>Complete the hospital's financial assistance application</li>
               </ol>
 
-              <a
-                href="#"
+              <Link
+                to="/cases"
                 className="block text-center bg-blue-600 text-white py-2 px-4 rounded text-sm hover:bg-blue-700"
               >
-                Submit my bill for review →
-              </a>
+                Submit my case →
+              </Link>
             </div>
           ) : (
-            <div className="border-2 border-dashed rounded-lg p-8 text-center text-gray-400 h-full flex items-center justify-center">
-              <div>
-                <div className="text-4xl mb-3">🗺️</div>
-                <p>Click a state on the map to see your rights</p>
+            <div className="border rounded-lg p-6 h-full flex flex-col">
+              <div className="text-center mb-6">
+                <span className="text-4xl mb-3 block">🗺️</span>
+                <h2 className="font-semibold text-lg mb-1">Click any state to get started</h2>
+                <p className="text-sm text-gray-500">
+                  We'll show you the charity care laws, income limits, and billing protections where you live.
+                </p>
+              </div>
+
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-3">
+                <p className="text-sm text-gray-700">
+                  <strong className="text-green-800">Most people don't know this:</strong> if you're uninsured or have a low income, you may already qualify for free or reduced-cost care — even if you've already been billed.
+                </p>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600 space-y-3 flex-1">
+                <p className="font-medium text-gray-700 text-xs uppercase tracking-wider">What the colors mean</p>
+                <div className="flex items-start gap-2">
+                  <span className="inline-block w-3 h-3 rounded-full bg-green-400 mt-1 shrink-0"></span>
+                  <p><strong>Strong</strong> — State law requires <em>all</em> hospitals (including for-profit) to offer financial assistance, which means you may qualify for free or reduced-cost care.</p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="inline-block w-3 h-3 rounded-full bg-yellow-400 mt-1 shrink-0"></span>
+                  <p><strong>Moderate</strong> — Some state protections exist. Federal law still covers nonprofit hospitals, which means you may qualify for free or reduced-cost care.</p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="inline-block w-3 h-3 rounded-full bg-red-400 mt-1 shrink-0"></span>
+                  <p><strong>Weak</strong> — Limited state law, but <strong>federal law still applies</strong> — every nonprofit hospital must offer a Financial Assistance Policy, which means you may qualify for free or reduced-cost care. Most major hospitals are nonprofits.</p>
+                </div>
               </div>
             </div>
           )}
@@ -231,10 +255,11 @@ export default function CharityCare() {
           {/* Card 1: Don't Pay */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
             <div className="text-2xl mb-3">🛑</div>
-            <h3 className="font-bold text-lg mb-2">Don't Pay Immediately</h3>
+            <h3 className="font-bold text-lg mb-2">You Probably Don't Have to Pay Right Away</h3>
             <p className="text-sm text-gray-700 mb-3">
-              You have time. Most hospital bills have errors, and you have the
+              Most hospital bills have errors, and you have the
               right to request an itemized bill and dispute any charges.
+              There's usually more time than you think.
             </p>
             <ul className="text-sm space-y-1.5">
               <li className="flex gap-2">
@@ -290,7 +315,7 @@ export default function CharityCare() {
             </h3>
             <p className="text-sm text-gray-700 mb-3">
               Medical debt has special protections. It's often better to let a
-              bill go to collections than to overpay or sign financing.
+              bill go to collections than to overpay or sign predatory financing like CareCredit.
             </p>
             <ul className="text-sm space-y-1.5">
               <li className="flex gap-2">
