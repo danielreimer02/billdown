@@ -28,13 +28,14 @@ def _sync_pg_enums():
     This idempotent helper fills that gap so we can expand enums freely in
     models.py without hand-writing Alembic migrations.
     """
-    from app.models.models import DocumentType, DisputeType, CaseStatus, CaseType
+    from app.models.models import DocumentType, DisputeType, CaseStatus, CaseType, UserRole
 
     pg_enum_map = {
         "documenttype": DocumentType,
         "disputetype": DisputeType,
         "casestatus": CaseStatus,
         "casetype": CaseType,
+        "userrole": UserRole,
     }
 
     with engine.begin() as conn:
@@ -152,6 +153,10 @@ async def lifespan(app: FastAPI):
     )
     logger.info(f"Billing ETL summary: {billing_summary}")
 
+    # Seed site_config with default entries (templates, reference data)
+    from app.services.config_seed import seed_site_config
+    seed_site_config()
+
     yield
     # ── Shutdown ─────────────────────────
     logger.info("Shutting down...")
@@ -177,6 +182,12 @@ app.include_router(cases.router,     prefix="/api/cases",     tags=["cases"])
 app.include_router(documents.router, prefix="/api/cases",     tags=["documents"])
 app.include_router(lcd.router,       prefix="/api/lcd",       tags=["lcd"])
 app.include_router(billing.router,   prefix="/api/billing",   tags=["billing"])
+
+from app.api.routes import config
+app.include_router(config.router,    prefix="/api/config",    tags=["config"])
+
+from app.api.routes import analytics
+app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 
 
 @app.get("/health")

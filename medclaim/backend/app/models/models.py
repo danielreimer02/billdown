@@ -55,6 +55,14 @@ class DisputeType(str, enum.Enum):
     PRIOR_AUTH      = "prior_auth"       # denial appeal
 
 
+class UserRole(str, enum.Enum):
+    INDIVIDUAL = "individual"
+    EMPLOYEE   = "employee"
+    PHYSICIAN  = "physician"
+    COMPANY    = "company"
+    ADMIN      = "admin"
+
+
 # ─────────────────────────────────────────
 # USER
 # ─────────────────────────────────────────
@@ -66,6 +74,10 @@ class User(Base):
     email          = Column(String, unique=True, nullable=False, index=True)
     hashed_password = Column(String, nullable=False)
     full_name      = Column(String)
+    role           = Column(Enum(UserRole, values_callable=lambda e: [x.value for x in e]),
+                            default=UserRole.INDIVIDUAL, nullable=False)
+    company_name   = Column(String, nullable=True)      # for company/employee users
+    npi            = Column(String, nullable=True)       # for physician users
     is_physician   = Column(Boolean, default=False)
     is_active      = Column(Boolean, default=True)
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
@@ -191,3 +203,20 @@ class Dispute(Base):
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
 
     case = relationship("Case", back_populates="disputes")
+
+
+# ─────────────────────────────────────────
+# SITE_CONFIG
+# Admin-editable key-value config table
+# ─────────────────────────────────────────
+
+class SiteConfig(Base):
+    __tablename__ = "site_config"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    key         = Column(String, unique=True, nullable=False, index=True)
+    value       = Column(JSON, nullable=False)       # JSONB — templates, state data, etc.
+    category    = Column(String(50), nullable=False)  # letter_templates, charity_care, etc.
+    label       = Column(String(200))                 # human-readable name for UI
+    description = Column(Text)                        # what this config controls
+    updated_at  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

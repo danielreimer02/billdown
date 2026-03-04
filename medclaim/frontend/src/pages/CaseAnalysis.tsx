@@ -92,7 +92,7 @@ function getDisputeGuidance(flag: Flag, cptCode: string): {
       `I respectfully request an itemized explanation for this pricing and would like to ` +
       `discuss a fair adjustment, perhaps based on a reasonable multiple of the Medicare rate."`,
     tips: [
-      "Many hospitals will negotiate to 2–3× Medicare when asked politely.",
+      "Many hospitals will negotiate to 2–3× Medicare when asked politely. Where does this number come from? The RAND Corporation's Hospital Price Transparency study found that hospitals charge private insurers an average of 2.5× Medicare rates nationally, with some exceeding 4×. (Source: RAND, \"Prices Paid to Hospitals by Private Health Plans,\" 2024 — rand.org/hospital-prices)",
       "Reference the hospital's published price transparency file if available.",
       "For uninsured patients, ask about financial assistance or self-pay discounts FIRST.",
       "If insured, your EOB should show the allowed amount — compare to the billed charge.",

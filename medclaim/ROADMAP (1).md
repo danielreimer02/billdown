@@ -15,6 +15,7 @@ One end goal: the only platform that represents both patients AND physicians aga
 - Charge success fee on savings
 - Add Good Faith estimate to protect yourself in future and in review bills and home page and getting started I think its no surprises act
 - add were these cpts are appropriate given the icds ie what cpts do you get from uploaded icds 
+- add ncd data 
 
 ---
 

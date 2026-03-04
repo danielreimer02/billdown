@@ -31,6 +31,11 @@ class LCD(Base):
     status = Column(String(20))
     display_id = Column(String(50))
     last_updated = Column(DateTime)
+    # Narrative / clinical content (HTML)
+    indication = Column(Text)              # clinical indications — includes prior treatment / step therapy
+    summary_of_evidence = Column(Text)     # evidence summary
+    analysis_of_evidence = Column(Text)    # evidence analysis
+    bibliography = Column(Text)            # references / citations
 
 
 # ─────────────────────────────────────────

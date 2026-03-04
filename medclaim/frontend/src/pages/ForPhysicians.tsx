@@ -1,10 +1,11 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { lcdApi } from "@/lib/api"
 
 /**
  * For Physicians page — prior auth protection & LCD coding reference.
  *
  * This is the physician-facing product:
+ * - Interactive demo showing the denial-prevention workflow
  * - Look up which ICD-10 codes support a CPT before submitting
  * - Understand standalone vs combination requirements
  * - Pre-check prior auth denials risk
@@ -36,6 +37,224 @@ type CoveredCodesResult = {
   noncoveredCodes: Array<{ code: string; description: string }>
   xx000Message: string | null
   message: string
+}
+
+/* ── Demo data ── */
+
+const demoPatient = { name: "Margaret S.", age: 67, state: "TX" }
+const demoProcedure = { cpt: "27447", desc: "Total Knee Arthroplasty" }
+const demoDiagnosis = { icd10: "M17.11", desc: "Primary osteoarthritis, right knee" }
+
+const demoChecklist = [
+  { item: "ICD-10 M17.11 is a standalone covered code", status: "pass" as const, detail: "No combination required — this diagnosis alone supports the procedure." },
+  { item: "LCD L33543 covers CPT 27447 in Texas", status: "pass" as const, detail: "Novitas Solutions MAC for TX region." },
+  { item: "Document failed conservative treatment", status: "warn" as const, detail: "LCD requires documentation of 3+ months PT, NSAIDs, or injections before surgery." },
+  { item: "BMI documented if ≥ 40", status: "warn" as const, detail: "Some MACs require additional documentation for morbidly obese patients." },
+  { item: "Pre-op imaging on file", status: "pass" as const, detail: "Weight-bearing X-rays showing joint space narrowing required." },
+  { item: "Noncovered diagnoses avoided", status: "pass" as const, detail: "33 ICD-10 codes are explicitly noncovered for this CPT — none selected." },
+]
+
+const demoTimeline = [
+  { label: "Enter CPT + ICD-10", icon: "🩺", ms: 0 },
+  { label: "Check LCD coverage", icon: "📋", ms: 800 },
+  { label: "Verify documentation", icon: "✅", ms: 1600 },
+  { label: "Review denial risk", icon: "📊", ms: 2400 },
+  { label: "Submit with confidence", icon: "🚀", ms: 3200 },
+]
+
+/* ── Demo component ── */
+
+function PhysicianDemo() {
+  const [phase, setPhase] = useState<"idle" | "running" | "checklist" | "done">("idle")
+  const [step, setStep] = useState(0)
+  const [checkIdx, setCheckIdx] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+
+  function startDemo() {
+    setPhase("running")
+    setStep(0)
+    setCheckIdx(0)
+  }
+
+  function resetDemo() {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setPhase("idle")
+    setStep(0)
+    setCheckIdx(0)
+  }
+
+  // Timeline animation
+  useEffect(() => {
+    if (phase !== "running") return
+    if (step < demoTimeline.length) {
+      timerRef.current = setTimeout(() => setStep(s => s + 1), 700)
+    } else {
+      timerRef.current = setTimeout(() => { setPhase("checklist"); setCheckIdx(0) }, 400)
+    }
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [phase, step])
+
+  // Checklist animation
+  useEffect(() => {
+    if (phase !== "checklist") return
+    if (checkIdx < demoChecklist.length) {
+      timerRef.current = setTimeout(() => setCheckIdx(i => i + 1), 600)
+    } else {
+      timerRef.current = setTimeout(() => setPhase("done"), 400)
+    }
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [phase, checkIdx])
+
+  const passCount = demoChecklist.filter(c => c.status === "pass").length
+  const warnCount = demoChecklist.filter(c => c.status === "warn").length
+
+  return (
+    <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-950 rounded-2xl p-6 text-white overflow-hidden shadow-2xl">
+      {/* Terminal header */}
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-3 h-3 rounded-full bg-red-500" />
+        <div className="w-3 h-3 rounded-full bg-yellow-500" />
+        <div className="w-3 h-3 rounded-full bg-green-500" />
+        <span className="ml-3 text-xs text-gray-400 font-mono">medclaim — denial prevention</span>
+        <div className="flex-1" />
+        {phase !== "idle" && (
+          <button onClick={resetDemo} className="text-xs text-gray-500 hover:text-gray-300">
+            Reset
+          </button>
+        )}
+      </div>
+
+      {/* Idle state */}
+      {phase === "idle" && (
+        <div className="text-center py-8">
+          <div className="text-5xl mb-4">🩺</div>
+          <h3 className="text-xl font-semibold mb-2">See It In Action</h3>
+          <p className="text-gray-400 text-sm mb-5 max-w-md mx-auto">
+            Watch how a physician checks coverage before submitting a total knee replacement claim
+          </p>
+          <button
+            onClick={startDemo}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-lg text-sm font-medium transition-colors"
+          >
+            ▶ Run Demo
+          </button>
+        </div>
+      )}
+
+      {phase !== "idle" && (
+        <div className="space-y-5">
+          {/* Patient & procedure header */}
+          <div className="flex gap-4">
+            <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 flex-1">
+              <div className="text-[10px] text-indigo-400 uppercase font-semibold mb-1">Patient</div>
+              <div className="text-sm font-medium">{demoPatient.name}, {demoPatient.age}</div>
+              <div className="text-xs text-gray-400">{demoPatient.state}</div>
+            </div>
+            <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 flex-1">
+              <div className="text-[10px] text-indigo-400 uppercase font-semibold mb-1">Procedure</div>
+              <div className="text-sm font-medium font-mono">{demoProcedure.cpt}</div>
+              <div className="text-xs text-gray-400">{demoProcedure.desc}</div>
+            </div>
+            <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 flex-1">
+              <div className="text-[10px] text-indigo-400 uppercase font-semibold mb-1">Diagnosis</div>
+              <div className="text-sm font-medium font-mono">{demoDiagnosis.icd10}</div>
+              <div className="text-xs text-gray-400">{demoDiagnosis.desc}</div>
+            </div>
+          </div>
+
+          {/* Timeline steps */}
+          <div className="flex items-center justify-between px-2">
+            {demoTimeline.map((t, i) => (
+              <div key={t.label} className="flex flex-col items-center gap-1 relative">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all duration-500 ${
+                  i < step
+                    ? "bg-indigo-600 scale-100"
+                    : i === step && phase === "running"
+                      ? "bg-indigo-500 scale-110 ring-2 ring-indigo-400/50"
+                      : "bg-white/5 scale-90 opacity-30"
+                }`}>
+                  {t.icon}
+                </div>
+                <span className={`text-[10px] transition-all duration-300 ${
+                  i < step ? "text-indigo-300" : "text-gray-600"
+                }`}>
+                  {t.label}
+                </span>
+                {/* connector line */}
+                {i < demoTimeline.length - 1 && (
+                  <div className={`absolute top-5 left-[calc(50%+20px)] w-[calc(100%-10px)] h-0.5 transition-all duration-500 ${
+                    i < step - 1 ? "bg-indigo-600" : "bg-white/5"
+                  }`} style={{ width: "60px" }} />
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Checklist */}
+          {(phase === "checklist" || phase === "done") && (
+            <div className="bg-black/20 rounded-lg p-4">
+              <div className="text-xs text-indigo-400 font-mono mb-3">
+                {phase === "checklist" ? "⏳ Running pre-submission checks…" : "✓ Pre-submission check complete"}
+              </div>
+              <div className="space-y-2">
+                {demoChecklist.slice(0, checkIdx).map((c, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-3 px-3 py-2 rounded transition-all duration-300 ${
+                      c.status === "pass" ? "bg-green-900/20" : "bg-amber-900/20"
+                    }`}
+                  >
+                    <span className="text-sm mt-0.5">
+                      {c.status === "pass" ? "✅" : "⚠️"}
+                    </span>
+                    <div>
+                      <div className={`text-sm font-medium ${
+                        c.status === "pass" ? "text-green-300" : "text-amber-300"
+                      }`}>
+                        {c.item}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-0.5">{c.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Final verdict */}
+          {phase === "done" && (
+            <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 border border-green-700/30 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-lg font-bold text-green-300">Ready to Submit</h4>
+                <div className="flex gap-3 text-xs">
+                  <span className="bg-green-800/50 text-green-300 px-2 py-1 rounded">{passCount} passed</span>
+                  <span className="bg-amber-800/50 text-amber-300 px-2 py-1 rounded">{warnCount} review</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="bg-black/20 rounded p-3">
+                  <div className="text-2xl font-bold text-green-400">LOW</div>
+                  <div className="text-xs text-gray-400 mt-1">Denial Risk</div>
+                </div>
+                <div className="bg-black/20 rounded p-3">
+                  <div className="text-2xl font-bold text-blue-400">LCD L33543</div>
+                  <div className="text-xs text-gray-400 mt-1">Coverage Citation</div>
+                </div>
+                <div className="bg-black/20 rounded p-3">
+                  <div className="text-2xl font-bold text-indigo-400">Standalone</div>
+                  <div className="text-xs text-gray-400 mt-1">Code Classification</div>
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 mt-3 text-center">
+                Diagnosis M17.11 is a standalone covered code for CPT 27447 under LCD L33543 in Texas.
+                Document conservative treatment history and submit with confidence.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function ForPhysicians() {
@@ -80,9 +299,11 @@ export default function ForPhysicians() {
       {/* Hero */}
       <div className="mb-10">
         <h1 className="text-3xl font-bold mb-2">For Physicians</h1>
-        <p className="text-gray-600 text-lg">
-          Code correctly the first time. Prevent denials before they happen.
-        </p>
+      </div>
+
+      {/* Interactive Demo */}
+      <div className="mb-12">
+        <PhysicianDemo />
       </div>
 
       {/* How it works */}

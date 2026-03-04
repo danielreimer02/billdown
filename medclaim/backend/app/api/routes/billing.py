@@ -316,3 +316,459 @@ async def icd10_description(
             "description": None,
             "message": f"Lookup failed: {str(e)}",
         }
+
+
+# ─────────────────────────────────────────
+# EXPLORER — browse/search CMS datasets
+# ─────────────────────────────────────────
+
+@router.get("/explorer/mue")
+async def explorer_mue(
+    search: Optional[str] = Query(None, description="Search by CPT code"),
+    setting: Optional[str] = Query(None, description="Filter by setting e.g. 'Practitioner'"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Browse NCCI MUE limits with search and pagination."""
+    try:
+        with engine.connect() as conn:
+            conditions = ["1=1"]
+            params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
+
+            if search:
+                conditions.append("m.cpt_code LIKE :search")
+                params["search"] = f"%{search.strip()}%"
+            if setting:
+                conditions.append("LOWER(m.setting) = :setting")
+                params["setting"] = setting.lower()
+
+            where = " AND ".join(conditions)
+
+            total = conn.execute(
+                text(f"SELECT COUNT(*) FROM ncci_mue m WHERE {where}"), params
+            ).scalar() or 0
+
+            rows = conn.execute(
+                text(f"""
+                    SELECT m.cpt_code, m.mue_value, m.setting, m.mai, m.rationale,
+                           m.effective_date,
+                           p.description
+                    FROM ncci_mue m
+                    LEFT JOIN LATERAL (
+                        SELECT description FROM pfs_rvu
+                        WHERE hcpcs = m.cpt_code AND modifier IS NULL
+                        LIMIT 1
+                    ) p ON true
+                    WHERE {where}
+                    ORDER BY m.cpt_code, m.setting
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            ).fetchall()
+
+            return {
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": (total + page_size - 1) // page_size,
+                "rows": [
+                    {
+                        "cptCode": r.cpt_code,
+                        "mueValue": r.mue_value,
+                        "setting": r.setting,
+                        "mai": r.mai,
+                        "rationale": r.rationale,
+                        "effectiveDate": str(r.effective_date) if r.effective_date else None,
+                        "description": r.description,
+                    }
+                    for r in rows
+                ],
+            }
+    except Exception as e:
+        return {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 0, "rows": [], "error": str(e)}
+
+
+@router.get("/explorer/pfs")
+async def explorer_pfs(
+    search: Optional[str] = Query(None, description="Search by CPT code or description"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Browse Physician Fee Schedule RVU data with search and pagination."""
+    try:
+        with engine.connect() as conn:
+            conditions = ["modifier IS NULL"]
+            params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
+
+            if search:
+                s = search.strip()
+                conditions.append(
+                    "(hcpcs LIKE :search OR LOWER(description) LIKE :search_lower)"
+                )
+                params["search"] = f"%{s}%"
+                params["search_lower"] = f"%{s.lower()}%"
+
+            where = " AND ".join(conditions)
+
+            total = conn.execute(
+                text(f"SELECT COUNT(*) FROM pfs_rvu WHERE {where}"), params
+            ).scalar() or 0
+
+            rows = conn.execute(
+                text(f"""
+                    SELECT hcpcs, description, status_code,
+                           work_rvu, nonfac_pe_rvu, facility_pe_rvu, mp_rvu,
+                           nonfac_total, facility_total, conv_factor
+                    FROM pfs_rvu
+                    WHERE {where}
+                    ORDER BY hcpcs
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            ).fetchall()
+
+            return {
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": (total + page_size - 1) // page_size,
+                "rows": [
+                    {
+                        "hcpcs": r.hcpcs,
+                        "description": r.description,
+                        "statusCode": r.status_code,
+                        "workRvu": r.work_rvu,
+                        "nonfacPeRvu": r.nonfac_pe_rvu,
+                        "facilityPeRvu": r.facility_pe_rvu,
+                        "mpRvu": r.mp_rvu,
+                        "nonfacTotal": r.nonfac_total,
+                        "facilityTotal": r.facility_total,
+                        "convFactor": r.conv_factor,
+                    }
+                    for r in rows
+                ],
+            }
+    except Exception as e:
+        return {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 0, "rows": [], "error": str(e)}
+
+
+@router.get("/explorer/ptp")
+async def explorer_ptp(
+    search: Optional[str] = Query(None, description="Search by CPT code"),
+    setting: Optional[str] = Query(None, description="Filter by setting"),
+    active_only: bool = Query(True, description="Only show active (not deleted) edits"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Browse NCCI PTP bundling edits with search and pagination."""
+    try:
+        with engine.connect() as conn:
+            conditions = ["1=1"]
+            params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
+
+            if search:
+                s = search.strip()
+                conditions.append(
+                    "(p.column1_cpt LIKE :search OR p.column2_cpt LIKE :search)"
+                )
+                params["search"] = f"%{s}%"
+            if setting:
+                conditions.append("LOWER(p.setting) = :setting")
+                params["setting"] = setting.lower()
+            if active_only:
+                conditions.append("(p.deletion_date IS NULL OR p.deletion_date > CURRENT_DATE)")
+
+            where = " AND ".join(conditions)
+
+            total = conn.execute(
+                text(f"SELECT COUNT(*) FROM ncci_ptp p WHERE {where}"), params
+            ).scalar() or 0
+
+            rows = conn.execute(
+                text(f"""
+                    SELECT p.column1_cpt, p.column2_cpt, p.setting,
+                           p.effective_date, p.deletion_date, p.modifier_ind, p.rationale,
+                           d1.description AS desc1, d2.description AS desc2
+                    FROM ncci_ptp p
+                    LEFT JOIN LATERAL (
+                        SELECT description FROM pfs_rvu
+                        WHERE hcpcs = p.column1_cpt AND modifier IS NULL
+                        LIMIT 1
+                    ) d1 ON true
+                    LEFT JOIN LATERAL (
+                        SELECT description FROM pfs_rvu
+                        WHERE hcpcs = p.column2_cpt AND modifier IS NULL
+                        LIMIT 1
+                    ) d2 ON true
+                    WHERE {where}
+                    ORDER BY p.column1_cpt, p.column2_cpt
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            ).fetchall()
+
+            return {
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": (total + page_size - 1) // page_size,
+                "rows": [
+                    {
+                        "column1Cpt": r.column1_cpt,
+                        "column2Cpt": r.column2_cpt,
+                        "setting": r.setting,
+                        "effectiveDate": str(r.effective_date) if r.effective_date else None,
+                        "deletionDate": str(r.deletion_date) if r.deletion_date else None,
+                        "modifierInd": r.modifier_ind,
+                        "rationale": r.rationale,
+                        "desc1": r.desc1,
+                        "desc2": r.desc2,
+                    }
+                    for r in rows
+                ],
+            }
+    except Exception as e:
+        return {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 0, "rows": [], "error": str(e)}
+
+
+@router.get("/explorer/icd10")
+async def explorer_icd10(
+    search: Optional[str] = Query(None, description="Search by ICD-10 code or description"),
+    chapter: Optional[str] = Query(None, description="Filter by chapter letter e.g. 'M'"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+):
+    """
+    Browse all distinct ICD-10 codes with descriptions.
+    Merges covered and noncovered tables to provide a complete view.
+    """
+    try:
+        with engine.connect() as conn:
+            conditions = ["1=1"]
+            params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
+
+            if search:
+                s = search.strip()
+                conditions.append(
+                    "(code LIKE :search_upper OR LOWER(description) LIKE :search_lower)"
+                )
+                params["search_upper"] = f"%{s.upper()}%"
+                params["search_lower"] = f"%{s.lower()}%"
+
+            if chapter:
+                conditions.append("code LIKE :chapter")
+                params["chapter"] = f"{chapter.upper()}%"
+
+            where = " AND ".join(conditions)
+
+            base_cte = """
+                WITH icd_raw AS (
+                    (SELECT DISTINCT ON (icd10_code_id)
+                           icd10_code_id AS code, description
+                    FROM article_x_icd10_covered
+                    WHERE description IS NOT NULL AND description != ''
+                    ORDER BY icd10_code_id, article_version DESC)
+                    UNION
+                    (SELECT DISTINCT ON (icd10_code_id)
+                           icd10_code_id AS code, description
+                    FROM article_x_icd10_noncovered
+                    WHERE description IS NOT NULL AND description != ''
+                    ORDER BY icd10_code_id, article_version DESC)
+                ),
+                icd_dedup AS (
+                    SELECT code, MAX(description) AS description
+                    FROM icd_raw
+                    GROUP BY code
+                )
+            """
+
+            total = conn.execute(
+                text(f"{base_cte} SELECT COUNT(*) FROM icd_dedup WHERE {where}"),
+                params,
+            ).scalar() or 0
+
+            rows = conn.execute(
+                text(f"""
+                    {base_cte}
+                    SELECT code, description
+                    FROM icd_dedup
+                    WHERE {where}
+                    ORDER BY code
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            ).fetchall()
+
+            # Chapter summary for nav
+            chapters = []
+            if page == 1 and not search:
+                ch_rows = conn.execute(
+                    text("""
+                        WITH icd_raw AS (
+                            SELECT DISTINCT icd10_code_id AS code FROM article_x_icd10_covered
+                            UNION
+                            SELECT DISTINCT icd10_code_id AS code FROM article_x_icd10_noncovered
+                        )
+                        SELECT LEFT(code, 1) AS ch, COUNT(*) AS cnt
+                        FROM icd_raw
+                        GROUP BY 1 ORDER BY 1
+                    """),
+                ).fetchall()
+                chapters = [{"letter": r.ch, "count": r.cnt} for r in ch_rows]
+
+            return {
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": (total + page_size - 1) // page_size,
+                "chapters": chapters,
+                "rows": [
+                    {"code": r.code, "description": r.description}
+                    for r in rows
+                ],
+            }
+    except Exception as e:
+        return {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 0, "chapters": [], "rows": [], "error": str(e)}
+
+
+@router.get("/explorer/cpt")
+async def explorer_cpt(
+    search: Optional[str] = Query(None, description="Search by CPT code or description"),
+    range_start: Optional[str] = Query(None, description="Start of code range e.g. '10000'"),
+    range_end: Optional[str] = Query(None, description="End of code range e.g. '19999'"),
+    status: Optional[str] = Query(None, description="Filter by status code e.g. 'A'"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+):
+    """
+    Browse all CPT/HCPCS codes from the Physician Fee Schedule.
+    Also includes HCPCS codes from LCD articles that aren't in PFS.
+    """
+    try:
+        with engine.connect() as conn:
+            conditions = ["1=1"]
+            params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
+
+            if search:
+                s = search.strip()
+                conditions.append(
+                    "(code LIKE :search_upper OR LOWER(description) LIKE :search_lower)"
+                )
+                params["search_upper"] = f"%{s.upper()}%"
+                params["search_lower"] = f"%{s.lower()}%"
+
+            if range_start:
+                conditions.append("code >= :range_start")
+                params["range_start"] = range_start.strip()
+            if range_end:
+                conditions.append("code <= :range_end")
+                params["range_end"] = range_end.strip()
+            if status:
+                conditions.append("status_code = :status")
+                params["status"] = status.strip().upper()
+
+            where = " AND ".join(conditions)
+
+            base_cte = """
+                WITH cpt_all AS (
+                    SELECT hcpcs AS code, description, status_code,
+                           work_rvu, nonfac_pe_rvu, facility_pe_rvu, mp_rvu,
+                           nonfac_total, facility_total, conv_factor
+                    FROM pfs_rvu
+                    WHERE modifier IS NULL
+                    UNION ALL
+                    SELECT * FROM (
+                        SELECT DISTINCT ON (h.hcpc_code_id)
+                               h.hcpc_code_id AS code,
+                               COALESCE(h.long_description, h.short_description) AS description,
+                               NULL::text AS status_code,
+                               NULL::real AS work_rvu, NULL::real AS nonfac_pe_rvu,
+                               NULL::real AS facility_pe_rvu, NULL::real AS mp_rvu,
+                               NULL::real AS nonfac_total, NULL::real AS facility_total,
+                               NULL::real AS conv_factor
+                        FROM article_x_hcpc_code h
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM pfs_rvu p
+                            WHERE p.hcpcs = h.hcpc_code_id AND p.modifier IS NULL
+                        )
+                        ORDER BY h.hcpc_code_id, h.article_version DESC
+                    ) gap_fill
+                ),
+                cpt_dedup AS (
+                    SELECT code,
+                           MAX(description) FILTER (WHERE description IS NOT NULL AND description != '') AS description,
+                           MAX(status_code) AS status_code,
+                           MAX(work_rvu) AS work_rvu,
+                           MAX(nonfac_pe_rvu) AS nonfac_pe_rvu,
+                           MAX(facility_pe_rvu) AS facility_pe_rvu,
+                           MAX(mp_rvu) AS mp_rvu,
+                           MAX(nonfac_total) AS nonfac_total,
+                           MAX(facility_total) AS facility_total,
+                           MAX(conv_factor) AS conv_factor
+                    FROM cpt_all
+                    GROUP BY code
+                )
+            """
+
+            total = conn.execute(
+                text(f"{base_cte} SELECT COUNT(*) FROM cpt_dedup WHERE {where}"),
+                params,
+            ).scalar() or 0
+
+            rows = conn.execute(
+                text(f"""
+                    {base_cte}
+                    SELECT code, description, status_code,
+                           work_rvu, nonfac_pe_rvu, facility_pe_rvu, mp_rvu,
+                           nonfac_total, facility_total, conv_factor
+                    FROM cpt_dedup
+                    WHERE {where}
+                    ORDER BY code
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            ).fetchall()
+
+            # Code range summary for navigation
+            ranges = []
+            if page == 1 and not search and not range_start:
+                rng_rows = conn.execute(
+                    text(f"""
+                        {base_cte}
+                        SELECT
+                            CASE
+                                WHEN code ~ '^[0-9]{{5}}$' THEN
+                                    LPAD(CAST(FLOOR(CAST(code AS INTEGER) / 10000) * 10000 AS TEXT), 5, '0')
+                                ELSE LEFT(code, 1)
+                            END AS range_key,
+                            COUNT(*) AS cnt
+                        FROM cpt_dedup
+                        GROUP BY 1 ORDER BY 1
+                    """),
+                ).fetchall()
+                ranges = [{"range": r.range_key, "count": r.cnt} for r in rng_rows]
+
+            return {
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": (total + page_size - 1) // page_size,
+                "ranges": ranges,
+                "rows": [
+                    {
+                        "code": r.code,
+                        "description": r.description,
+                        "statusCode": r.status_code,
+                        "workRvu": r.work_rvu,
+                        "nonfacPeRvu": r.nonfac_pe_rvu,
+                        "facilityPeRvu": r.facility_pe_rvu,
+                        "mpRvu": r.mp_rvu,
+                        "nonfacTotal": r.nonfac_total,
+                        "facilityTotal": r.facility_total,
+                        "convFactor": r.conv_factor,
+                    }
+                    for r in rows
+                ],
+            }
+    except Exception as e:
+        return {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 0, "ranges": [], "rows": [], "error": str(e)}

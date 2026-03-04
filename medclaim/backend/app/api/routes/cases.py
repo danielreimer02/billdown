@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models.models import Case, CaseStatus, CaseType
+from app.models.models import Case, CaseStatus, CaseType, User
+from app.core.security import get_current_user
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -65,16 +66,16 @@ class CaseResponse(BaseModel):
 def create_case(
     payload: CaseCreate,
     db: Session = Depends(get_db),
-    # TODO: add current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user),
 ):
-    """Create a new case. Defaults to billing type."""
+    """Create a new case. Assigns to logged-in user if authenticated."""
     balance = None
     if payload.total_billed is not None and payload.total_paid is not None:
         balance = payload.total_billed - payload.total_paid
 
     case = Case(
         id=str(uuid.uuid4()),
-        user_id=None,  # TODO: from auth — nullable until login is wired
+        user_id=current_user.id if current_user else None,
         case_type=payload.case_type,
         state=payload.state or "",
         locality=payload.locality,
@@ -96,25 +97,34 @@ def create_case(
 def list_cases(
     type: Optional[CaseType] = Query(None, description="Filter by case type"),
     db: Session = Depends(get_db),
-    # TODO: add current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     """
-    List cases. Optionally filter by type.
+    List cases. Authenticated users see only their own cases.
+    Unauthenticated requests see all cases (dev/admin convenience).
 
-    GET /api/cases/              — all cases
+    GET /api/cases/              — user's cases (or all if not logged in)
     GET /api/cases/?type=billing — only billing cases
     """
     query = db.query(Case)
+    if current_user:
+        query = query.filter(Case.user_id == current_user.id)
     if type:
         query = query.filter(Case.case_type == type)
-    # TODO: filter by current_user when auth is wired
     return query.order_by(Case.created_at.desc()).all()
 
 
 @router.get("/{case_id}", response_model=CaseResponse)
-def get_case(case_id: str, db: Session = Depends(get_db)):
+def get_case(
+    case_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user),
+):
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    # Authenticated users can only see their own cases
+    if current_user and case.user_id and case.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Case not found")
     return case
 
@@ -124,7 +134,7 @@ def update_case(
     case_id: str,
     payload: CaseUpdate,
     db: Session = Depends(get_db),
-    # TODO: add current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     """
     Partial update — only set fields are applied.
@@ -132,6 +142,8 @@ def update_case(
     """
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if current_user and case.user_id and case.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Case not found")
 
     update_data = payload.model_dump(exclude_unset=True)
@@ -153,11 +165,13 @@ def update_case(
 def delete_case(
     case_id: str,
     db: Session = Depends(get_db),
-    # TODO: add current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     """Delete a case and all related records."""
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if current_user and case.user_id and case.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Case not found")
     db.delete(case)
     db.commit()

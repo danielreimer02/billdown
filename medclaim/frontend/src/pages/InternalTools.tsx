@@ -30,6 +30,41 @@ const tools = [
     description:
       "Browse and search all Local Coverage Determinations and Articles in the CMS database. View CPT codes, ICD-10 mappings, group rules, and state jurisdictions.",
   },
+  {
+    to: "/mue-explorer",
+    icon: "📊",
+    name: "MUE Explorer",
+    description:
+      "Browse Medically Unlikely Edits — maximum units per CPT per day. Search by code, filter by setting (Practitioner, Outpatient Hospital, DME).",
+  },
+  {
+    to: "/pfs-explorer",
+    icon: "💲",
+    name: "PFS Explorer",
+    description:
+      "Browse the Physician Fee Schedule with RVU breakdowns (Work, PE, MP). See national Medicare payment rates and conversion factor math.",
+  },
+  {
+    to: "/ptp-explorer",
+    icon: "🔗",
+    name: "PTP Explorer",
+    description:
+      "Browse NCCI Procedure-to-Procedure bundling edits — 4.5M+ CPT pair rules. See which codes are bundled and whether modifiers can unbundle them.",
+  },
+  {
+    to: "/icd10-explorer",
+    icon: "🏥",
+    name: "ICD-10 Explorer",
+    description:
+      "Browse 58,000+ ICD-10 diagnosis codes organized by chapter (A–Z). Search by code or description and see coverage status from LCD data.",
+  },
+  {
+    to: "/cpt-explorer",
+    icon: "🔬",
+    name: "CPT Explorer",
+    description:
+      "Browse all CPT and HCPCS procedure codes with RVU breakdowns and Medicare payment rates. Click any code to see Work, PE, and MP components.",
+  },
 ]
 
 export default function InternalTools() {
@@ -41,7 +76,7 @@ export default function InternalTools() {
         These are the same databases our automated analysis uses under the hood.
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {tools.map((tool) => (
           <Link
             key={tool.to}

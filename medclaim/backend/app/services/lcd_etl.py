@@ -55,6 +55,7 @@ TABLE_COLUMNS = {
     "lcd": [
         "lcd_id", "lcd_version", "title", "determination_number",
         "status", "display_id", "last_updated",
+        "indication", "summary_of_evidence", "analysis_of_evidence", "bibliography",
     ],
     "lcd_related_documents": [
         "lcd_id", "lcd_version", "related_num",

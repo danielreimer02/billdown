@@ -31,7 +31,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = localStorage.getItem("access_token")
+  const token = localStorage.getItem("mc_token")
 
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
@@ -337,6 +337,102 @@ export const billingApi = {
 
 
 // ─────────────────────────────────────────
+// BILLING EXPLORERS — browse CMS datasets
+// ─────────────────────────────────────────
+
+export const mueExplorerApi = {
+  browse: (params?: { search?: string; setting?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.setting) qs.set("setting", params.setting)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      rows: Array<{
+        cptCode: string; mueValue: number; setting: string; mai: string
+        rationale: string; effectiveDate: string | null; description: string | null
+      }>
+    }>(`/api/billing/explorer/mue?${qs.toString()}`)
+  },
+}
+
+export const pfsExplorerApi = {
+  browse: (params?: { search?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      rows: Array<{
+        hcpcs: string; description: string; statusCode: string
+        workRvu: number; nonfacPeRvu: number; facilityPeRvu: number; mpRvu: number
+        nonfacTotal: number; facilityTotal: number; convFactor: number
+      }>
+    }>(`/api/billing/explorer/pfs?${qs.toString()}`)
+  },
+}
+
+export const ptpExplorerApi = {
+  browse: (params?: { search?: string; setting?: string; activeOnly?: boolean; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.setting) qs.set("setting", params.setting)
+    if (params?.activeOnly !== undefined) qs.set("active_only", String(params.activeOnly))
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      rows: Array<{
+        column1Cpt: string; column2Cpt: string; setting: string
+        effectiveDate: string | null; deletionDate: string | null
+        modifierInd: string; rationale: string
+        desc1: string | null; desc2: string | null
+      }>
+    }>(`/api/billing/explorer/ptp?${qs.toString()}`)
+  },
+}
+
+export const icd10ExplorerApi = {
+  browse: (params?: { search?: string; chapter?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.chapter) qs.set("chapter", params.chapter)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      chapters: Array<{ letter: string; count: number }>
+      rows: Array<{ code: string; description: string | null }>
+    }>(`/api/billing/explorer/icd10?${qs.toString()}`)
+  },
+}
+
+export const cptExplorerApi = {
+  browse: (params?: { search?: string; rangeStart?: string; rangeEnd?: string; status?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.rangeStart) qs.set("range_start", params.rangeStart)
+    if (params?.rangeEnd) qs.set("range_end", params.rangeEnd)
+    if (params?.status) qs.set("status", params.status)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      ranges: Array<{ range: string; count: number }>
+      rows: Array<{
+        code: string; description: string | null; statusCode: string | null
+        workRvu: number | null; nonfacPeRvu: number | null; facilityPeRvu: number | null
+        mpRvu: number | null; nonfacTotal: number | null; facilityTotal: number | null
+        convFactor: number | null
+      }>
+    }>(`/api/billing/explorer/cpt?${qs.toString()}`)
+  },
+}
+
+
+// ─────────────────────────────────────────
 // LCD LOOKUP
 // ─────────────────────────────────────────
 
@@ -465,4 +561,44 @@ export const lcdExplorerApi = {
       noncoveredCodes: Array<{ icd10Code: string; group: number; description: string }>
       linkedLcds: Array<{ lcdId: number; title: string; status: string }>
     }>(`/api/lcd/explorer/article/${articleId}`),
+}
+
+
+// ── Site Config API ──
+
+export interface ConfigEntry {
+  id: number
+  key: string
+  value: unknown
+  category: string
+  label: string | null
+  description: string | null
+  updatedAt: string | null
+}
+
+export const configApi = {
+  list: (category?: string) => {
+    const qs = category ? `?category=${encodeURIComponent(category)}` : ""
+    return request<ConfigEntry[]>(`/api/config${qs}`)
+  },
+  categories: () =>
+    request<Array<{ category: string; count: number }>>("/api/config/categories"),
+  get: (key: string) =>
+    request<ConfigEntry>(`/api/config/${encodeURIComponent(key)}`),
+  create: (entry: { key: string; value: unknown; category: string; label?: string; description?: string }) =>
+    request<{ status: string; key: string }>("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    }),
+  update: (key: string, data: { value: unknown; label?: string; description?: string }) =>
+    request<{ status: string; key: string }>(`/api/config/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  delete: (key: string) =>
+    request<{ status: string; key: string }>(`/api/config/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    }),
 }

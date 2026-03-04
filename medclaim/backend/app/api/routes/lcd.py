@@ -252,14 +252,22 @@ async def explorer_lcd_detail(lcd_id: int):
             if not lcd_row:
                 return {"error": f"LCD {lcd_id} not found"}
 
-            # Linked articles
+            # Linked articles — join on article_id only and use latest
+            # version, because lcd_related_documents often references
+            # article versions that have since been superseded.
             articles = conn.execute(
                 text("""
                     SELECT DISTINCT a.article_id, a.article_version, a.title, a.status
                     FROM lcd_related_documents rd
-                    JOIN article a ON a.article_id = rd.r_article_id
-                        AND a.article_version = rd.r_article_version
+                    JOIN (
+                        SELECT article_id, MAX(article_version) AS article_version
+                        FROM article
+                        GROUP BY article_id
+                    ) latest ON latest.article_id = rd.r_article_id
+                    JOIN article a ON a.article_id = latest.article_id
+                        AND a.article_version = latest.article_version
                     WHERE rd.lcd_id = :lcd_id AND rd.lcd_version = :lcd_version
+                        AND rd.r_article_id IS NOT NULL
                 """),
                 {"lcd_id": lcd_row.lcd_id, "lcd_version": lcd_row.lcd_version},
             ).fetchall()
@@ -284,20 +292,26 @@ async def explorer_lcd_detail(lcd_id: int):
                         "articleId": art.article_id,
                     })
 
-            # Contractors / jurisdictions
+            # Contractors / jurisdictions — use latest article version
             jurisdictions = conn.execute(
                 text("""
                     SELECT DISTINCT sl.state_abbrev, sl.description AS state_name
                     FROM lcd_related_documents rd
+                    JOIN (
+                        SELECT article_id, MAX(article_version) AS article_version
+                        FROM article
+                        GROUP BY article_id
+                    ) latest ON latest.article_id = rd.r_article_id
                     JOIN article_x_contractor ac
-                        ON ac.article_id = rd.r_article_id
-                        AND ac.article_version = rd.r_article_version
+                        ON ac.article_id = latest.article_id
+                        AND ac.article_version = latest.article_version
                     JOIN contractor_jurisdiction cj
                         ON cj.contractor_id = ac.contractor_id
                         AND cj.contractor_type_id = ac.contractor_type_id
                         AND cj.contractor_version = ac.contractor_version
                     JOIN state_lookup sl ON sl.state_id = cj.state_id
                     WHERE rd.lcd_id = :lcd_id AND rd.lcd_version = :lcd_version
+                        AND rd.r_article_id IS NOT NULL
                     ORDER BY sl.state_abbrev
                 """),
                 {"lcd_id": lcd_row.lcd_id, "lcd_version": lcd_row.lcd_version},
