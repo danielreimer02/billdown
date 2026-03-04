@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Query
-from app.services.lcd_service import lookup_lcd, get_medicare_rate
+from app.services.lcd_service import lookup_lcd, get_medicare_rate, lookup_covered_codes, lookup_cpts_for_diagnosis
 
 router = APIRouter()
 
@@ -60,5 +60,90 @@ async def lcd_lookup(
             f"for diagnosis {icd10_code}"
             f"{' in ' + state if state else ''}. "
             f"{'Medicare rate: $' + str(medicare_rate) if medicare_rate else ''}"
+        ),
+    }
+
+
+@router.get("/covered-codes")
+async def lcd_covered_codes(
+    cpt_code: str = Query(..., description="CPT procedure code e.g. 27447"),
+    state: str = Query(..., description="Two letter state code e.g. TX"),
+):
+    """
+    Physician helper: get all covered and noncovered ICD-10 codes
+    for a CPT in a state, organized by group with standalone/combination rules.
+    """
+    result = lookup_covered_codes(cpt_code, state)
+
+    if not result:
+        return {
+            "cptCode": cpt_code,
+            "state": state,
+            "lcdId": None,
+            "lcdTitle": None,
+            "articleId": None,
+            "articleTitle": None,
+            "groups": [],
+            "standaloneCodes": [],
+            "combinationGroups": [],
+            "noncoveredCodes": [],
+            "xx000Message": None,
+            "message": f"No LCD data found for CPT {cpt_code} in {state}",
+        }
+
+    total_covered = sum(len(g["codes"]) for g in result.groups)
+    return {
+        "cptCode": cpt_code,
+        "state": state,
+        "lcdId": result.lcd_id,
+        "lcdTitle": result.lcd_title,
+        "articleId": result.article_id,
+        "articleTitle": result.article_title,
+        "groups": result.groups,
+        "standaloneCodes": result.standalone_codes,
+        "combinationGroups": result.combination_groups,
+        "noncoveredCodes": result.noncovered_codes,
+        "xx000Message": result.xx000_message,
+        "message": (
+            f"Found {total_covered} covered and "
+            f"{len(result.noncovered_codes)} noncovered ICD-10 codes "
+            f"for CPT {cpt_code} in {state}"
+            f"{' under LCD ' + result.lcd_id if result.lcd_id else ''}"
+            f"{' (' + str(len(result.standalone_codes)) + ' standalone)' if result.standalone_codes else ''}"
+        ),
+    }
+
+
+@router.get("/cpts-for-diagnosis")
+async def lcd_cpts_for_diagnosis(
+    icd10_code: str = Query(..., description="ICD-10 diagnosis code e.g. M17.11"),
+    state: str = Query(..., description="Two letter state code e.g. TX"),
+):
+    """
+    Reverse lookup: ICD-10 + state → all CPT procedure codes that accept
+    this diagnosis.  Useful for spotting overbilling, bundling issues,
+    and physician planning.
+    """
+    result = lookup_cpts_for_diagnosis(icd10_code, state)
+
+    if not result:
+        return {
+            "icd10Code": icd10_code,
+            "state": state,
+            "cpts": [],
+            "message": f"No CPTs found for diagnosis {icd10_code} in {state}",
+        }
+
+    standalone_count = sum(1 for c in result.cpts if c.get("standalone"))
+    combo_count = len(result.cpts) - standalone_count
+
+    return {
+        "icd10Code": icd10_code,
+        "state": state,
+        "cpts": result.cpts,
+        "message": (
+            f"Found {len(result.cpts)} CPT code(s) that accept "
+            f"diagnosis {icd10_code} in {state}"
+            f"{f' ({standalone_count} standalone, {combo_count} require combination)' if combo_count > 0 else ''}"
         ),
     }

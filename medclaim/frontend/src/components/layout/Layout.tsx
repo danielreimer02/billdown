@@ -36,8 +36,13 @@ export default function Layout() {
             </Link>
             <nav className="flex items-center gap-6 text-sm font-medium text-gray-600">
               {navLink("/", "Home")}
+              {navLink("/start", "Where Do I Start?")}
+              {navLink("/cases", "My Cases")}
+              {navLink("/next", "Protect Yourself for Next Time")}
+              {navLink("/physicians", "For Physicians")}
+              <span className="w-px h-5 bg-gray-300" />
+              {navLink("/bill-analysis", "Bill Analysis")}
               {navLink("/lcd", "LCD Lookup")}
-              {navLink("/cases", "Review My Bill")}
             </nav>
           </div>
         </div>

@@ -18,20 +18,32 @@ def generate_uuid():
 # ─────────────────────────────────────────
 
 class CaseStatus(str, enum.Enum):
-    PENDING   = "pending"    # just created
-    ANALYZING = "analyzing"  # documents processing
-    REVIEWED  = "reviewed"   # analysis complete, awaiting action
-    DISPUTED  = "disputed"   # letter sent
-    RESOLVED  = "resolved"   # outcome known
-    CLOSED    = "closed"
+    UPLOADED       = "uploaded"         # document(s) uploaded, waiting for OCR
+    OCR_PROCESSING = "ocr_processing"   # OCR running in background
+    NEEDS_REVIEW   = "needs_review"     # codes extracted, user must confirm
+    ANALYZING      = "analyzing"        # user confirmed, pipeline running
+    ANALYZED       = "analyzed"         # analysis complete
+    LETTERS_READY  = "letters_ready"    # dispute letters generated
+    DISPUTED       = "disputed"         # letter sent
+    RESOLVED       = "resolved"         # outcome known
+    CLOSED         = "closed"
 
 
 class DocumentType(str, enum.Enum):
     HOSPITAL_BILL  = "hospital_bill"
-    EOB            = "eob"            # Explanation of Benefits
+    ITEMIZED_BILL  = "itemized_bill"   # detailed line-item bill
+    SUMMARY_BILL   = "summary_bill"    # summary / statement
+    EOB            = "eob"             # Explanation of Benefits
     DENIAL_LETTER  = "denial_letter"
     MEDICAL_RECORD = "medical_record"
+    AUTHORIZED_REP = "authorized_rep"  # authorized representative form
     OTHER          = "other"
+
+
+class CaseType(str, enum.Enum):
+    BILLING    = "billing"       # Steps 1-2: bill disputes (uninsured + insured)
+    PRIOR_AUTH = "prior_auth"    # Step 3: patient-side denial appeals
+    PHYSICIAN  = "physician"     # Step 4: physician-side prior auth tool
 
 
 class DisputeType(str, enum.Enum):
@@ -71,7 +83,8 @@ class Case(Base):
 
     id           = Column(String, primary_key=True, default=generate_uuid)
     user_id      = Column(String, ForeignKey("users.id"), nullable=True)
-    status       = Column(Enum(CaseStatus), default=CaseStatus.PENDING)
+    case_type    = Column(Enum(CaseType, values_callable=lambda e: [x.value for x in e]), default=CaseType.BILLING, nullable=False)
+    status       = Column(Enum(CaseStatus, values_callable=lambda e: [x.value for x in e]), default=CaseStatus.UPLOADED)
 
     # Patient context (no PHI required — just codes)
     state        = Column(String(2))        # TX, CO etc — for charity care rules
@@ -95,9 +108,9 @@ class Case(Base):
     updated_at     = Column(DateTime(timezone=True), onupdate=func.now())
 
     user        = relationship("User", back_populates="cases")
-    documents   = relationship("Document", back_populates="case")
-    line_items  = relationship("LineItem", back_populates="case")
-    disputes    = relationship("Dispute", back_populates="case")
+    documents   = relationship("Document", back_populates="case", cascade="all, delete-orphan")
+    line_items  = relationship("LineItem", back_populates="case", cascade="all, delete-orphan")
+    disputes    = relationship("Dispute", back_populates="case", cascade="all, delete-orphan")
 
 
 # ─────────────────────────────────────────
@@ -110,7 +123,7 @@ class Document(Base):
 
     id            = Column(String, primary_key=True, default=generate_uuid)
     case_id       = Column(String, ForeignKey("cases.id"), nullable=False)
-    document_type = Column(Enum(DocumentType))
+    document_type = Column(Enum(DocumentType, values_callable=lambda e: [x.value for x in e]))
     file_name     = Column(String)
     storage_path  = Column(String)          # S3/Spaces path
     is_native_pdf = Column(Boolean)         # native vs scanned
@@ -141,7 +154,10 @@ class LineItem(Base):
     amount_allowed  = Column(Float)         # what insurance allowed
     amount_paid     = Column(Float)         # what was actually paid
 
-    # Analysis results
+    # User confirmation — analysis ONLY runs after this is True
+    user_confirmed  = Column(Boolean, default=False)
+
+    # Analysis results (populated by BackgroundTask after confirmation)
     medicare_rate   = Column(Float)         # CMS published rate
     cash_price      = Column(Float)         # hospital published cash price
     ncci_violation  = Column(Boolean)       # unbundling flag
@@ -162,7 +178,7 @@ class Dispute(Base):
 
     id           = Column(String, primary_key=True, default=generate_uuid)
     case_id      = Column(String, ForeignKey("cases.id"), nullable=False)
-    dispute_type = Column(Enum(DisputeType))
+    dispute_type = Column(Enum(DisputeType, values_callable=lambda e: [x.value for x in e]))
     description  = Column(Text)             # plain english explanation
     legal_basis  = Column(Text)             # LCD number, NCCI rule, etc
     amount_disputed = Column(Float)

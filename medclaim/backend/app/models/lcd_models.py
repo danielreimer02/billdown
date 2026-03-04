@@ -116,6 +116,23 @@ class ArticleICD10Covered(Base):
 # Article ↔ ICD-10 NONCOVERED diagnoses
 # ─────────────────────────────────────────
 
+class ArticleICD10CoveredGroup(Base):
+    """
+    Group metadata for covered ICD-10 codes.
+    Each article can have multiple groups. The paragraph field contains
+    HTML text describing the group rule:
+      - "stand-alone diagnosis codes" → codes in this group work alone
+      - "Group X and Group Y must be billed" → combination required
+    """
+    __tablename__ = "article_x_icd10_covered_group"
+
+    article_id = Column(Integer, primary_key=True)
+    article_version = Column(Integer, primary_key=True)
+    icd10_covered_group = Column(Integer, primary_key=True)
+    paragraph = Column(Text)
+    last_updated = Column(DateTime)
+
+
 class ArticleICD10Noncovered(Base):
     __tablename__ = "article_x_icd10_noncovered"
 
@@ -133,6 +150,17 @@ class ArticleICD10Noncovered(Base):
     __table_args__ = (
         Index("ix_article_icd10_noncovered_code", "icd10_code_id"),
     )
+
+
+class ArticleICD10NoncoveredGroup(Base):
+    """Group metadata for noncovered ICD-10 codes."""
+    __tablename__ = "article_x_icd10_noncovered_group"
+
+    article_id = Column(Integer, primary_key=True)
+    article_version = Column(Integer, primary_key=True)
+    icd10_noncovered_group = Column(Integer, primary_key=True)
+    paragraph = Column(Text)
+    last_updated = Column(DateTime)
 
 
 # ─────────────────────────────────────────

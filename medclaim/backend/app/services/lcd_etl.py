@@ -14,6 +14,7 @@ Total rows: ~600K across all tables. Takes ~30s on first load.
 import csv
 import logging
 import os
+import sys
 import zipfile
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from sqlalchemy import text
 from app.db.session import engine
 
 logger = logging.getLogger(__name__)
+
+# CMS CSVs have huge fields (HTML blobs in lcd.csv) — raise the limit
+csv.field_size_limit(sys.maxsize)
 
 # ─────────────────────────────────────────
 # CSV file → table name mapping
@@ -36,7 +40,9 @@ TABLE_MAP = [
     ("article.csv", "article", "current_article"),
     ("article_x_hcpc_code.csv", "article_x_hcpc_code", "current_article"),
     ("article_x_icd10_covered.csv", "article_x_icd10_covered", "current_article"),
+    ("article_x_icd10_covered_group.csv", "article_x_icd10_covered_group", "current_article"),
     ("article_x_icd10_noncovered.csv", "article_x_icd10_noncovered", "current_article"),
+    ("article_x_icd10_noncovered_group.csv", "article_x_icd10_noncovered_group", "current_article"),
     ("article_x_contractor.csv", "article_x_contractor", "current_article"),
     ("state_lookup.csv", "state_lookup", "current_article"),
 ]
@@ -73,10 +79,18 @@ TABLE_COLUMNS = {
         "icd10_code_version", "icd10_covered_group", "range",
         "last_updated", "sort_order", "description", "asterisk",
     ],
+    "article_x_icd10_covered_group": [
+        "article_id", "article_version", "icd10_covered_group",
+        "paragraph", "last_updated",
+    ],
     "article_x_icd10_noncovered": [
         "article_id", "article_version", "icd10_code_id",
         "icd10_code_version", "icd10_noncovered_group", "range",
         "last_updated", "sort_order", "description", "asterisk",
+    ],
+    "article_x_icd10_noncovered_group": [
+        "article_id", "article_version", "icd10_noncovered_group",
+        "paragraph", "last_updated",
     ],
     "article_x_contractor": [
         "article_id", "article_version", "article_type",
@@ -146,7 +160,18 @@ def _load_table(
     rows_loaded = 0
     batch = []
 
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
+    # Some CMS CSVs use Windows-1252 encoding (0x96 = en-dash etc.)
+    encoding = "latin-1"  # safe default
+    for enc in ("utf-8-sig", "latin-1"):
+        try:
+            with open(csv_path, "r", encoding=enc) as f:
+                f.read(1024)  # test read
+            encoding = enc
+            break
+        except UnicodeDecodeError:
+            continue
+
+    with open(csv_path, "r", encoding=encoding, errors="replace") as f:
         reader = csv.DictReader(f)
 
         for row in reader:
@@ -182,12 +207,15 @@ def _load_table(
 
 
 def _insert_batch(conn, table_name: str, columns: list[str], batch: list[dict]):
-    """Bulk insert a batch of rows."""
+    """Bulk insert a batch of rows, skipping duplicates."""
     if not batch:
         return
     col_list = ", ".join(columns)
     param_list = ", ".join(f":{c}" for c in columns)
-    stmt = text(f"INSERT INTO {table_name} ({col_list}) VALUES ({param_list})")
+    stmt = text(
+        f"INSERT INTO {table_name} ({col_list}) VALUES ({param_list}) "
+        f"ON CONFLICT DO NOTHING"
+    )
     conn.execute(stmt, batch)
 
 
@@ -219,27 +247,27 @@ def load_lcd_data(data_dir: str) -> dict:
 
     summary = {}
 
-    with engine.begin() as conn:
-        for csv_name, table_name, subdir in TABLE_MAP:
-            csv_path = _find_csv(data_dir, csv_name, subdir)
-            if csv_path is None:
-                logger.warning(f"CSV not found: {csv_name} (looked in {subdir}/)")
-                summary[table_name] = 0
-                continue
+    for csv_name, table_name, subdir in TABLE_MAP:
+        csv_path = _find_csv(data_dir, csv_name, subdir)
+        if csv_path is None:
+            logger.warning(f"CSV not found: {csv_name} (looked in {subdir}/)")
+            summary[table_name] = 0
+            continue
 
-            columns = TABLE_COLUMNS.get(table_name, [])
-            if not columns:
-                logger.warning(f"No column mapping for table {table_name}")
-                summary[table_name] = 0
-                continue
+        columns = TABLE_COLUMNS.get(table_name, [])
+        if not columns:
+            logger.warning(f"No column mapping for table {table_name}")
+            summary[table_name] = 0
+            continue
 
-            active_only = table_name in ACTIVE_FILTER_TABLES
-            try:
+        active_only = table_name in ACTIVE_FILTER_TABLES
+        try:
+            with engine.begin() as conn:
                 count = _load_table(conn, csv_path, table_name, columns, active_only)
                 summary[table_name] = count
-            except Exception as e:
-                logger.error(f"Failed to load {table_name}: {e}")
-                summary[table_name] = f"ERROR: {e}"
+        except Exception as e:
+            logger.error(f"Failed to load {table_name}: {e}")
+            summary[table_name] = f"ERROR: {e}"
 
     total = sum(v for v in summary.values() if isinstance(v, int))
     logger.info(f"LCD ETL complete — {total:,} total rows across {len(summary)} tables")

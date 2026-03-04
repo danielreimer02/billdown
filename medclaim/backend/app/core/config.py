@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     # LCD reference data (CMS bulk CSVs)
     LCD_DATA_DIR: str = "/data/lcd_analysis/all_data"
 
+    # NCCI PTP edits (unbundling)
+    PTP_DATA_DIR: str = "/data/ptp_analysis/extracted"
+
+    # NCCI MUE (quantity limits) — add later
+    MUE_DATA_DIR: str = "/data/mue_analysis/extracted"
+
+    # Physician Fee Schedule (price check)
+    PFS_DATA_DIR: str = "/data/pfs_analysis"
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",

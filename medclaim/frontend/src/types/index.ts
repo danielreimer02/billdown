@@ -34,19 +34,30 @@ export interface LCDCoverage {
 // CASE TYPES
 // ─────────────────────────────────────────
 
+export type CaseType =
+  | "billing"
+  | "prior_auth"
+  | "physician"
+
 export type CaseStatus =
-  | "pending"
+  | "uploaded"
+  | "ocr_processing"
+  | "needs_review"
   | "analyzing"
-  | "reviewed"
+  | "analyzed"
+  | "letters_ready"
   | "disputed"
   | "resolved"
   | "closed"
 
 export type DocumentType =
   | "hospital_bill"
+  | "itemized_bill"
+  | "summary_bill"
   | "eob"
   | "denial_letter"
   | "medical_record"
+  | "authorized_rep"
   | "other"
 
 export type DisputeType =
@@ -59,6 +70,7 @@ export type DisputeType =
 
 export interface Case {
   id: string
+  caseType: CaseType
   status: CaseStatus
   state: string
   providerName?: string
@@ -68,7 +80,6 @@ export interface Case {
   balanceDue?: number
   savingsFound: number
   savingsAchieved: number
-  ourFee: number
   createdAt: string
 }
 
@@ -83,7 +94,7 @@ export interface Document {
 
 export interface LineItem {
   id: string
-  caseId: string
+  caseId?: string
   cptCode: string
   cptDescription?: string
   icd10Codes: string[]
@@ -92,9 +103,24 @@ export interface LineItem {
   amountAllowed?: number
   amountPaid?: number
   medicareRate?: number
-  ncciViolation: boolean
-  mueViolation: boolean
-  flags: string[]
+  ncciViolation?: boolean
+  mueViolation?: boolean
+  userConfirmed?: boolean
+  flags: Flag[]
+}
+
+export interface Flag {
+  type: "bundling" | "mue" | "price"
+  detail: string
+  // bundling
+  cpt1?: string
+  modifierInd?: string
+  // mue
+  maxUnits?: number
+  mai?: string
+  // price
+  medicareRate?: number
+  ratio?: number
 }
 
 export interface Dispute {
@@ -146,9 +172,39 @@ export interface ApiError {
 
 export interface UploadResponse {
   documentId: string
-  status: "completed"
-  cptCodesFound: string[]
-  icd10CodesFound: string[]
-  dollarAmounts: number[]
-  analysis: BillAnalysis
+  status: "uploaded"
+  message: string
+}
+
+export interface ExtractedCodesResponse {
+  caseId: string
+  lineItems: Array<{
+    id: string
+    cptCode: string
+    icd10Codes: string[]
+    units: number
+    amountBilled: number | null
+    userConfirmed: boolean
+  }>
+}
+
+export interface ConfirmCodesResponse {
+  status: "analyzing"
+  message: string
+}
+
+export interface AnalysisResponse {
+  caseId: string
+  status: CaseStatus | null
+  savingsFound: number
+  lineItems: Array<{
+    id: string
+    cptCode: string
+    units: number
+    amountBilled: number | null
+    medicareRate: number | null
+    ncciViolation: boolean | null
+    mueViolation: boolean | null
+    flags: Flag[]
+  }>
 }

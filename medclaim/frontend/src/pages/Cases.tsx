@@ -1,4 +1,8 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
+import { useParams, useNavigate, useLocation } from "react-router-dom"
+import { charityCareData } from "@/data/charityCare"
+import { casesApi, documentsApi, BASE_URL } from "@/lib/api"
+import type { CaseType, DocumentType, AnalysisResponse, ExtractedCodesResponse } from "@/types"
 
 const US_STATES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
@@ -7,10 +11,25 @@ const US_STATES = [
   "VA","WA","WV","WI","WY","DC",
 ]
 
+// FPL calculation (2024 guidelines)
+const FPL_BASE = 15060
+const FPL_PER_PERSON = 5380
+function getFplPercent(income: number, householdSize: number, state?: string): number {
+  const size = Math.max(1, householdSize)
+  let base = FPL_BASE
+  let per = FPL_PER_PERSON
+  if (state === "AK") { base = 18810; per = 6730 }
+  if (state === "HI") { base = 17310; per = 6190 }
+  const fpl = base + per * (size - 1)
+  return Math.round((income / fpl) * 100)
+}
+
 const DOC_TYPES = [
   { value: "itemized_bill", label: "Itemized Bill" },
+  { value: "hospital_bill", label: "Hospital / Facility Bill" },
   { value: "summary_bill", label: "Summary / Statement" },
   { value: "eob", label: "Explanation of Benefits (EOB)" },
+  { value: "denial_letter", label: "Denial Letter" },
   { value: "medical_record", label: "Medical Record" },
   { value: "authorized_rep", label: "Authorized Representative Form" },
   { value: "other", label: "Other" },
@@ -20,59 +39,64 @@ type DocType = typeof DOC_TYPES[number]["value"]
 
 interface CaseDocument {
   id: string
-  type: DocType
+  type: string
   fileName: string
   size: number
   addedAt: string
-  /** Runtime-only — not persisted */
+  ocrCompleted?: boolean
   objectUrl?: string
 }
 
 interface LocalCase {
   id: string
+  caseType: CaseType
   state: string
   provider: string
   totalBilled: number | null
   householdSize: number | null
   annualIncome: number | null
   documents: CaseDocument[]
-  status: "pending" | "analyzing" | "reviewed"
+  status: string
   feedback: string | null
+  savingsFound: number
   createdAt: string
 }
 
-function loadCases(): LocalCase[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem("medclaim_cases") || "[]")
-    // migrate old format
-    return raw.map((c: any) => ({
-      ...c,
-      documents: c.documents ?? (c.fileName ? [{
-        id: crypto.randomUUID(),
-        type: "itemized_bill" as DocType,
-        fileName: c.fileName,
-        size: 0,
-        addedAt: c.createdAt,
-      }] : []),
-    }))
-  } catch {
-    return []
+// Safe error message extraction
+function errMsg(err: unknown, fallback: string): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === "string") return err
+  return fallback
+}
+
+// Bridge: convert backend Case → LocalCase shape
+function apiCaseToLocal(c: any): LocalCase {
+  return {
+    id: c.id,
+    caseType: c.caseType ?? c.case_type ?? "billing",
+    state: c.state || "",
+    provider: c.providerName || c.provider_name || "",
+    totalBilled: c.totalBilled ?? c.total_billed ?? null,
+    householdSize: c.householdSize ?? c.household_size ?? null,
+    annualIncome: c.annualIncome ?? c.annual_income ?? null,
+    documents: [],
+    status: c.status ?? "uploaded",
+    feedback: null,
+    savingsFound: c.savingsFound ?? c.savings_found ?? 0,
+    createdAt: c.createdAt ?? c.created_at ?? new Date().toISOString(),
   }
 }
 
-function saveCases(cases: LocalCase[]) {
-  // Strip objectUrls before saving
-  const cleaned = cases.map((c) => ({
-    ...c,
-    documents: c.documents.map(({ objectUrl: _, ...d }) => d),
-  }))
-  localStorage.setItem("medclaim_cases", JSON.stringify(cleaned))
-}
-
 const statusConfig: Record<string, { label: string; color: string }> = {
-  pending:   { label: "Pending Review",  color: "bg-yellow-100 text-yellow-800" },
-  analyzing: { label: "Analyzing",       color: "bg-blue-100 text-blue-800" },
-  reviewed:  { label: "Review Complete", color: "bg-green-100 text-green-800" },
+  uploaded:       { label: "Uploaded",         color: "bg-gray-100 text-gray-700" },
+  ocr_processing: { label: "Processing…",     color: "bg-blue-100 text-blue-800" },
+  needs_review:   { label: "Needs Review",    color: "bg-amber-100 text-amber-800" },
+  analyzing:      { label: "Analyzing…",      color: "bg-blue-100 text-blue-800" },
+  analyzed:       { label: "Analysis Ready",  color: "bg-green-100 text-green-800" },
+  letters_ready:  { label: "Letters Ready",   color: "bg-green-100 text-green-800" },
+  disputed:       { label: "Disputed",        color: "bg-purple-100 text-purple-800" },
+  resolved:       { label: "Resolved",        color: "bg-emerald-100 text-emerald-800" },
+  closed:         { label: "Closed",          color: "bg-gray-100 text-gray-500" },
 }
 
 function docTypeLabel(type: DocType): string {
@@ -154,9 +178,30 @@ Sincerely,
 type View = "list" | "new-info" | "new-upload" | "detail"
 
 export default function Cases() {
-  const [cases, setCases] = useState<LocalCase[]>(loadCases)
-  const [view, setView] = useState<View>("list")
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const { id: urlCaseId } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  // Derive high-level view from URL; wizard sub-steps stay in local state
+  const isNewRoute = location.pathname === "/cases/new"
+  const [wizardStep, setWizardStep] = useState<"info" | "upload">("info")
+
+  const view: View = urlCaseId
+    ? "detail"
+    : isNewRoute
+      ? (wizardStep === "upload" ? "new-upload" : "new-info")
+      : "list"
+
+  const selectedId = urlCaseId ?? null
+
+  const [cases, setCases] = useState<LocalCase[]>([])
+  const [loadingList, setLoadingList] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null)
+  const [extractedCodes, setExtractedCodes] = useState<ExtractedCodesResponse | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // New case form state
   const [state, setState] = useState("")
@@ -175,8 +220,127 @@ export default function Cases() {
   const [editHousehold, setEditHousehold] = useState("")
   const [editIncome, setEditIncome] = useState("")
   const uploadRef = useRef<HTMLInputElement>(null)
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [deleteDocId, setDeleteDocId] = useState<string | null>(null)
 
-  useEffect(() => { saveCases(cases) }, [cases])
+  // ── Fetch case list on mount ──
+  const fetchCases = useCallback(async () => {
+    try {
+      setLoadingList(true)
+      const apiCases = await casesApi.list()
+      setCases(apiCases.map(apiCaseToLocal))
+    } catch (err: any) {
+      setError(errMsg(err, "Failed to load cases"))
+    } finally {
+      setLoadingList(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchCases() }, [fetchCases])
+
+  // Reset wizard step when leaving /cases/new
+  useEffect(() => {
+    if (!isNewRoute) setWizardStep("info")
+  }, [isNewRoute])
+
+  // ── Poll when status is async-processing ──
+  const selectedStatus = cases.find((c) => c.id === selectedId)?.status
+  const shouldPoll = !!selectedId && ["uploaded", "ocr_processing", "analyzing"].includes(selectedStatus ?? "")
+  const lastPolledStatusRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
+    if (!shouldPoll || !selectedId) return
+    // Reset last polled status when starting a new poll cycle
+    lastPolledStatusRef.current = null
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updated = await casesApi.get(selectedId)
+        const local = apiCaseToLocal(updated)
+        const statusChanged = lastPolledStatusRef.current !== null && lastPolledStatusRef.current !== local.status
+        lastPolledStatusRef.current = local.status
+
+        // Only re-fetch docs when status transitions (e.g. uploaded → ocr_processing → needs_review)
+        // This avoids unnecessary API calls every 3s while status is unchanged
+        if (statusChanged) {
+          let docs: CaseDocument[] = []
+          try {
+            const apiDocs = await documentsApi.list(selectedId)
+            docs = apiDocs.map((d: any) => ({
+              id: d.id,
+              type: d.documentType ?? d.document_type ?? "hospital_bill",
+              fileName: d.fileName ?? d.file_name ?? "document",
+              size: 0,
+              addedAt: d.createdAt ?? d.created_at ?? new Date().toISOString(),
+              ocrCompleted: d.ocrCompleted ?? d.ocr_completed ?? false,
+              objectUrl: d.viewUrl ? `${BASE_URL}${d.viewUrl}` : undefined,
+            }))
+          } catch { /* keep existing on failure */ }
+
+          setCases((prev) => prev.map((c) => {
+            if (c.id !== selectedId) return c
+            const finalDocs = docs.length > 0 ? docs : c.documents
+            return { ...local, documents: finalDocs }
+          }))
+        } else {
+          // Status unchanged — just update case status, keep existing docs
+          setCases((prev) => prev.map((c) => {
+            if (c.id !== selectedId) return c
+            return { ...local, documents: c.documents }
+          }))
+        }
+
+        if (!["uploaded", "ocr_processing", "analyzing"].includes(local.status)) {
+          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
+        }
+      } catch { /* silently retry */ }
+    }, 3000)
+
+    return () => { if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null } }
+  }, [selectedId, shouldPoll])
+
+  // ── Fetch extracted codes when needs_review ──
+  useEffect(() => {
+    if (!selectedId) return
+    const sc = cases.find((c) => c.id === selectedId)
+    if (sc?.status === "needs_review" && !extractedCodes) {
+      documentsApi.extractedCodes(selectedId).then(setExtractedCodes).catch(() => {})
+    }
+  }, [selectedId, cases, extractedCodes])
+
+  // ── Fetch analysis when analyzed/letters_ready ──
+  useEffect(() => {
+    if (!selectedId) return
+    const sc = cases.find((c) => c.id === selectedId)
+    if (sc && ["analyzed", "letters_ready"].includes(sc.status) && !analysisResult) {
+      documentsApi.analysis(selectedId).then(setAnalysisResult).catch(() => {})
+    }
+  }, [selectedId, cases, analysisResult])
+
+  // ── Fetch documents when a case is selected ──
+  useEffect(() => {
+    if (!selectedId) return
+    const sc = cases.find((c) => c.id === selectedId)
+    if (sc && sc.documents.length === 0) {
+      documentsApi.list(selectedId).then((docs: any[]) => {
+        const mapped: CaseDocument[] = docs.map((d: any) => ({
+          id: d.id,
+          type: d.documentType ?? d.document_type ?? "hospital_bill",
+          fileName: d.fileName ?? d.file_name ?? "document",
+          size: 0,
+          addedAt: d.createdAt ?? d.created_at ?? new Date().toISOString(),
+          ocrCompleted: d.ocrCompleted ?? d.ocr_completed ?? false,
+          objectUrl: d.viewUrl ? `${BASE_URL}${d.viewUrl}` : undefined,
+        }))
+        if (mapped.length > 0) {
+          setCases((prev) =>
+            prev.map((c) => (c.id === selectedId ? { ...c, documents: mapped } : c))
+          )
+        }
+      }).catch(() => {})
+    }
+  }, [selectedId, cases])
 
   const selectedCase = cases.find((c) => c.id === selectedId) ?? null
 
@@ -215,65 +379,95 @@ export default function Cases() {
 
   function handleInfoSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setView("new-upload")
+    setWizardStep("upload")
   }
 
-  function handleFileSubmit(e: React.FormEvent) {
+  async function handleFileSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const docs: CaseDocument[] = []
-    if (file) {
-      docs.push({
-        id: crypto.randomUUID(),
-        type: "itemized_bill",
-        fileName: file.name,
-        size: file.size,
-        addedAt: new Date().toISOString(),
-        objectUrl: URL.createObjectURL(file),
+    if (!file) return
+    setUploading(true)
+    setError(null)
+    try {
+      // 1. Create the case on the backend
+      const created = await casesApi.create({
+        state,
+        providerName: provider || undefined,
+        totalBilled: totalBilled ? Number(totalBilled) : undefined,
+        householdSize: householdSize ? Number(householdSize) : undefined,
+        annualIncome: annualIncome ? Number(annualIncome) : undefined,
       })
+      const localCase = apiCaseToLocal(created)
+
+      // 2. Upload the first document
+      await documentsApi.upload(created.id, file, "hospital_bill" as DocumentType)
+
+      // 3. Refresh documents list for this case
+      const docs = await documentsApi.list(created.id)
+      localCase.documents = docs.map((d: any) => ({
+        id: d.id,
+        type: d.documentType ?? d.document_type ?? "hospital_bill",
+        fileName: d.fileName ?? d.file_name ?? "document",
+        size: 0,
+        addedAt: d.createdAt ?? d.created_at ?? new Date().toISOString(),
+        ocrCompleted: d.ocrCompleted ?? d.ocr_completed ?? false,
+        objectUrl: d.viewUrl ? `${BASE_URL}${d.viewUrl}` : undefined,
+      }))
+
+      setCases((prev) => [localCase, ...prev])
+      resetForm()
+      setShowHospitalLetter(false)
+      setShowInsuranceLetter(false)
+      setExtractedCodes(null)
+      setAnalysisResult(null)
+      navigate(`/cases/${localCase.id}`)
+    } catch (err: any) {
+      setError(errMsg(err, "Failed to create case"))
+    } finally {
+      setUploading(false)
     }
-    const newCase: LocalCase = {
-      id: crypto.randomUUID(),
-      state,
-      provider,
-      totalBilled: totalBilled ? Number(totalBilled) : null,
-      householdSize: householdSize ? Number(householdSize) : null,
-      annualIncome: annualIncome ? Number(annualIncome) : null,
-      documents: docs,
-      status: "pending",
-      feedback: null,
-      createdAt: new Date().toISOString(),
-    }
-    setCases((prev) => [newCase, ...prev])
-    resetForm()
-    setSelectedId(newCase.id)
-    setShowHospitalLetter(false)
-    setShowInsuranceLetter(false)
-    setView("detail")
   }
 
-  function handleAddDocument(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAddDocument(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f || !selectedId) return
-    const doc: CaseDocument = {
-      id: crypto.randomUUID(),
-      type: addDocType,
-      fileName: f.name,
-      size: f.size,
-      addedAt: new Date().toISOString(),
-      objectUrl: URL.createObjectURL(f),
-    }
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === selectedId
-          ? { ...c, documents: [...c.documents, doc] }
-          : c
+    setUploading(true)
+    try {
+      const resp = await documentsApi.upload(selectedId, f, addDocType as DocumentType)
+      const doc: CaseDocument = {
+        id: resp.documentId,
+        type: addDocType,
+        fileName: f.name,
+        size: f.size,
+        addedAt: new Date().toISOString(),
+        objectUrl: `${BASE_URL}/api/cases/${selectedId}/documents/${resp.documentId}/view`,
+      }
+      // Reset extracted codes and analysis so the review flow re-triggers
+      setExtractedCodes(null)
+      setAnalysisResult(null)
+      setCases((prev) =>
+        prev.map((c) =>
+          c.id === selectedId
+            ? { ...c, documents: [...c.documents, doc], status: "uploaded" }
+            : c
+        )
       )
-    )
-    if (uploadRef.current) uploadRef.current.value = ""
+    } catch (err: any) {
+      setError(errMsg(err, "Upload failed"))
+    } finally {
+      setUploading(false)
+      if (uploadRef.current) uploadRef.current.value = ""
+    }
   }
 
   function handleRemoveDocument(docId: string) {
-    if (!selectedId) return
+    setDeleteDocId(docId)
+  }
+
+  async function confirmDocDelete() {
+    if (!deleteDocId || !selectedId) return
+    const docId = deleteDocId
+    setDeleteDocId(null)
+    // Remove from local state immediately
     setCases((prev) =>
       prev.map((c) =>
         c.id === selectedId
@@ -281,14 +475,82 @@ export default function Cases() {
           : c
       )
     )
+    // Delete from backend (best-effort)
+    try {
+      await documentsApi.delete(selectedId, docId)
+    } catch { /* best-effort */ }
   }
 
-  function handleDelete(id: string) {
+  function renderDocDeleteModal() {
+    if (!deleteDocId) return null
+    const doc = selectedCase?.documents.find((d) => d.id === deleteDocId)
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/40" onClick={() => setDeleteDocId(null)} />
+        <div className="relative bg-white rounded-xl shadow-lg p-6 max-w-sm w-full mx-4">
+          <h3 className="text-lg font-semibold mb-2">Remove document?</h3>
+          <p className="text-sm text-gray-600 mb-6">
+            {doc ? `"${doc.fileName}" will be permanently deleted.` : "This document will be permanently deleted."} This cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setDeleteDocId(null)}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmDocDelete}
+              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirmId) return
+    const id = deleteConfirmId
+    setDeleteConfirmId(null)
+    try {
+      await casesApi.delete(id)
+    } catch { /* best-effort */ }
     setCases((prev) => prev.filter((c) => c.id !== id))
     if (selectedId === id) {
-      setSelectedId(null)
-      setView("list")
+      navigate("/cases")
     }
+  }
+
+  function renderDeleteModal() {
+    if (!deleteConfirmId) return null
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/40" onClick={() => setDeleteConfirmId(null)} />
+        <div className="relative bg-white rounded-xl shadow-lg p-6 max-w-sm w-full mx-4">
+          <h3 className="text-lg font-semibold mb-2">Delete case?</h3>
+          <p className="text-sm text-gray-600 mb-6">
+            This will permanently delete this case and all its documents. This cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setDeleteConfirmId(null)}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmDelete}
+              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   function copyLetter(text: string) {
@@ -305,7 +567,7 @@ export default function Cases() {
 
   // ─── Detail View ───
   if (view === "detail" && selectedCase) {
-    const sc = statusConfig[selectedCase.status] ?? statusConfig.pending
+    const sc = statusConfig[selectedCase.status] ?? statusConfig.uploaded
     const missingDocs = recommendedDocs.filter(
       (r) => !selectedCase.documents.some((d) => d.type === r.type)
     )
@@ -313,14 +575,21 @@ export default function Cases() {
     const insuranceLetterText = generateInsuranceLetter(selectedCase)
 
     return (
+      <>
       <div className="max-w-5xl mx-auto p-8">
         <button
-          onClick={() => { setView("list"); setShowHospitalLetter(false); setShowInsuranceLetter(false) }}
+          onClick={() => { navigate("/cases"); setShowHospitalLetter(false); setShowInsuranceLetter(false); setExtractedCodes(null); setAnalysisResult(null) }}
           className="text-sm text-gray-500 hover:text-gray-700 mb-6 flex items-center gap-1"
         >
           ← Back to cases
         </button>
 
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4 flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 text-xs font-bold">✕</button>
+          </div>
+        )}
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-xl font-bold">
@@ -442,7 +711,7 @@ export default function Cases() {
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{doc.fileName}</p>
                           <p className="text-xs text-gray-500">
-                            {docTypeLabel(doc.type)} · {doc.size > 0 ? `${(doc.size / 1024).toFixed(0)} KB · ` : ""}
+                            {docTypeLabel(doc.type as DocType)} · {doc.size > 0 ? `${(doc.size / 1024).toFixed(0)} KB · ` : ""}
                             {new Date(doc.addedAt).toLocaleDateString()}
                           </p>
                         </div>
@@ -460,9 +729,10 @@ export default function Cases() {
                         )}
                         <button
                           onClick={() => handleRemoveDocument(doc.id)}
-                          className="text-xs text-red-500 hover:text-red-700"
+                          className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                          title="Remove document"
                         >
-                          Remove
+                          ✕
                         </button>
                       </div>
                     </div>
@@ -485,8 +755,8 @@ export default function Cases() {
                     <option key={d.value} value={d.value}>{d.label}</option>
                   ))}
                 </select>
-                <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">
-                  + Add Document
+                <label className={`cursor-pointer px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${uploading ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
+                  {uploading ? "Uploading…" : "+ Add Document"}
                   <input
                     ref={uploadRef}
                     type="file"
@@ -520,7 +790,7 @@ export default function Cases() {
             )}
 
             <button
-              onClick={() => handleDelete(selectedCase.id)}
+              onClick={() => setDeleteConfirmId(selectedCase.id)}
               className="text-sm text-red-500 hover:text-red-700"
             >
               Delete this case
@@ -621,28 +891,299 @@ export default function Cases() {
               )}
             </div>
 
+            {/* Charity Care Eligibility (auto-calculated if income data exists) */}
+            {selectedCase.annualIncome != null && selectedCase.householdSize != null && (
+              (() => {
+                const pct = getFplPercent(selectedCase.annualIncome!, selectedCase.householdSize!, selectedCase.state)
+                const stateData = selectedCase.state ? charityCareData[selectedCase.state] : null
+                const federalFree = pct <= 200
+                const federalReduced = pct <= 400
+                const stateFree = stateData?.fplThreshold ? pct <= stateData.fplThreshold : false
+                const stateReduced = stateData?.reducedCareThreshold ? pct <= stateData.reducedCareThreshold : false
+
+                return (
+                  <div className="border rounded-lg p-5 mb-4">
+                    <div className="flex items-baseline justify-between mb-3">
+                      <h3 className="font-semibold text-sm">Charity Care Eligibility</h3>
+                      <span className="text-lg font-bold text-gray-900">{pct}% FPL</span>
+                    </div>
+
+                    <div className="w-full bg-gray-100 rounded-full h-2 mb-3">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-500 ${
+                          pct <= 200 ? "bg-green-400" : pct <= 400 ? "bg-yellow-400" : "bg-red-400"
+                        }`}
+                        style={{ width: `${Math.min(pct / 5, 100)}%` }}
+                      />
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      {federalFree ? (
+                        <p className="text-green-700">
+                          ✅ <strong>You very likely qualify for free care</strong> at nonprofit hospitals under federal FAP guidelines.
+                        </p>
+                      ) : federalReduced ? (
+                        <p className="text-yellow-700">
+                          🟡 <strong>You may qualify for reduced-cost care</strong> at nonprofit hospitals. Many FAPs offer sliding-scale discounts up to 400% FPL.
+                        </p>
+                      ) : (
+                        <p className="text-gray-600">
+                          At {pct}% FPL, you're above the typical FAP threshold — but it's still worth applying. Some hospitals have higher limits.
+                        </p>
+                      )}
+
+                      {stateData && (stateFree || stateReduced) && (
+                        <p className="text-green-700">
+                          ✅ <strong>{stateData.name} state law</strong> also covers you —
+                          {stateFree
+                            ? ` free care up to ${stateData.fplThreshold}% FPL.`
+                            : ` reduced-cost care up to ${stateData.reducedCareThreshold}% FPL.`}
+                          {stateData.hasMandatoryCharityCare && " Applies to all hospitals."}
+                        </p>
+                      )}
+
+                      <div className="bg-green-50 border border-green-200 rounded p-3 mt-2">
+                        <p className="text-gray-700 text-xs">
+                          <strong>💡 Tip:</strong> The single most effective thing to do right now is call the hospital's billing department and ask for their Financial Assistance Program (FAP) application. Fill it out and send it back to them — this alone can reduce or eliminate your entire bill.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()
+            )}
+
+            {/* Code Review (needs_review) */}
+            {selectedCase.status === "needs_review" && extractedCodes && (
+              <div className="border border-amber-300 bg-amber-50 rounded-lg p-5 mb-4">
+                <h3 className="font-semibold text-sm mb-1">📝 Review Extracted Codes</h3>
+                <p className="text-xs text-gray-600 mb-4">
+                  We pulled these from your bill. Please verify and correct anything that looks wrong, then confirm.
+                </p>
+                <div className="space-y-3 mb-4">
+                  {extractedCodes.lineItems.map((li, idx) => (
+                    <div key={li.id} className="bg-white border rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-400">Line {idx + 1}</span>
+                        {li.userConfirmed && (
+                          <span className="text-xs text-green-600 font-medium">✓ Confirmed</span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <label className="text-xs text-gray-500 block">CPT Code</label>
+                          <input
+                            type="text"
+                            value={li.cptCode}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setExtractedCodes((prev) => prev ? ({
+                                ...prev,
+                                lineItems: prev.lineItems.map((x) =>
+                                  x.id === li.id ? { ...x, cptCode: v } : x
+                                ),
+                              }) : prev)
+                            }}
+                            className="w-full border rounded px-2 py-1 text-sm font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block">Units</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={li.units}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              setExtractedCodes((prev) => prev ? ({
+                                ...prev,
+                                lineItems: prev.lineItems.map((x) =>
+                                  x.id === li.id ? { ...x, units: v } : x
+                                ),
+                              }) : prev)
+                            }}
+                            className="w-full border rounded px-2 py-1 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block">Billed</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={li.amountBilled ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value ? Number(e.target.value) : null
+                              setExtractedCodes((prev) => prev ? ({
+                                ...prev,
+                                lineItems: prev.lineItems.map((x) =>
+                                  x.id === li.id ? { ...x, amountBilled: v } : x
+                                ),
+                              }) : prev)
+                            }}
+                            className="w-full border rounded px-2 py-1 text-sm"
+                            placeholder="$0.00"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <label className="text-xs text-gray-500 block">ICD-10 Codes</label>
+                        <input
+                          type="text"
+                          value={li.icd10Codes.join(", ")}
+                          onChange={(e) => {
+                            const v = e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
+                            setExtractedCodes((prev) => prev ? ({
+                              ...prev,
+                              lineItems: prev.lineItems.map((x) =>
+                                x.id === li.id ? { ...x, icd10Codes: v } : x
+                              ),
+                            }) : prev)
+                          }}
+                          className="w-full border rounded px-2 py-1 text-sm font-mono"
+                          placeholder="M17.11, Z96.651"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  disabled={confirming}
+                  onClick={async () => {
+                    if (!extractedCodes) return
+                    setConfirming(true)
+                    try {
+                      await documentsApi.confirmCodes(
+                        selectedCase.id,
+                        extractedCodes.lineItems.map((li) => ({
+                          id: li.id,
+                          cptCode: li.cptCode,
+                          icd10Codes: li.icd10Codes,
+                          units: li.units,
+                          amountBilled: li.amountBilled,
+                        }))
+                      )
+                      // Move case to analyzing status locally
+                      setCases((prev) =>
+                        prev.map((c) =>
+                          c.id === selectedCase.id ? { ...c, status: "analyzing" } : c
+                        )
+                      )
+                      setExtractedCodes(null)
+                    } catch (err: any) {
+                      setError(errMsg(err, "Failed to confirm codes"))
+                    } finally {
+                      setConfirming(false)
+                    }
+                  }}
+                  className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
+                >
+                  {confirming ? "Submitting…" : "Confirm Codes & Start Analysis"}
+                </button>
+              </div>
+            )}
+
             {/* Analysis & Feedback */}
             <div className="border rounded-lg p-5">
               <h3 className="font-semibold text-sm mb-3">Analysis & Feedback</h3>
-              {selectedCase.feedback ? (
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                  {selectedCase.feedback}
-                </p>
-              ) : (
-                <div className="text-sm text-gray-500">
-                  {selectedCase.status === "pending" && (
-                    <p>
-                      Your bill is in the queue. While you wait, use the letters
-                      to request your records from the hospital and insurance.
-                      We'll analyze everything for coding errors, bundling violations,
-                      overcharges, and charity care eligibility.
+
+              {/* Show real analysis results */}
+              {analysisResult && ["analyzed", "letters_ready"].includes(selectedCase.status) ? (
+                <div className="space-y-4">
+                  {analysisResult.savingsFound > 0 && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <p className="text-green-800 font-semibold text-lg">
+                        💰 Potential Savings: ${analysisResult.savingsFound.toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+
+                  {analysisResult.lineItems.length > 0 ? (
+                    <div className="space-y-3">
+                      {analysisResult.lineItems.map((li) => (
+                        <div key={li.id} className="border rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-mono font-semibold text-sm">
+                              CPT {li.cptCode}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {li.units} unit{li.units !== 1 ? "s" : ""}
+                              {li.amountBilled != null && ` · $${li.amountBilled.toLocaleString()}`}
+                            </span>
+                          </div>
+
+                          {li.medicareRate != null && (
+                            <p className="text-xs text-gray-500 mb-2">
+                              Medicare rate: ${li.medicareRate.toFixed(2)}
+                            </p>
+                          )}
+
+                          {li.flags.length > 0 ? (
+                            <div className="space-y-2">
+                              {li.flags.map((flag, i) => (
+                                <div
+                                  key={i}
+                                  className={`rounded-lg p-3 text-sm ${
+                                    flag.type === "bundling"
+                                      ? "bg-red-50 border border-red-200 text-red-800"
+                                      : flag.type === "mue"
+                                      ? "bg-amber-50 border border-amber-200 text-amber-800"
+                                      : "bg-orange-50 border border-orange-200 text-orange-800"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="font-semibold text-xs uppercase">
+                                      {flag.type === "bundling" ? "🔗 NCCI Bundling" :
+                                       flag.type === "mue" ? "🔢 MUE Limit" :
+                                       "💲 Price Flag"}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs">{flag.detail}</p>
+                                  {flag.type === "mue" && flag.maxUnits != null && (
+                                    <p className="text-xs mt-1 opacity-75">
+                                      Max units allowed: {flag.maxUnits}
+                                      {flag.mai && ` (MAI: ${flag.mai})`}
+                                    </p>
+                                  )}
+                                  {flag.type === "price" && flag.ratio != null && (
+                                    <p className="text-xs mt-1 opacity-75">
+                                      Billed {flag.ratio.toFixed(1)}× the Medicare rate
+                                      {flag.medicareRate != null && ` ($${flag.medicareRate.toFixed(2)})`}
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-green-600">✓ No issues found for this line</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-green-700">
+                      ✅ No billing issues were detected. Your bill looks clean!
                     </p>
                   )}
-                  {selectedCase.status === "analyzing" && (
-                    <p>We're currently reviewing your bill. You'll see findings here once the analysis is complete.</p>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">
+                  {["uploaded", "ocr_processing"].includes(selectedCase.status) && (
+                    <div className="flex items-center gap-2">
+                      <span className="animate-pulse">⏳</span>
+                      <p>
+                        Your bill is being processed. While you wait, use the letters
+                        to request your records from the hospital and insurance.
+                      </p>
+                    </div>
                   )}
-                  {selectedCase.status === "reviewed" && (
-                    <p>Analysis complete — detailed findings will appear here.</p>
+                  {selectedCase.status === "needs_review" && (
+                    <p>👆 Please review the extracted codes above and confirm them to start the analysis.</p>
+                  )}
+                  {selectedCase.status === "analyzing" && (
+                    <div className="flex items-center gap-2">
+                      <span className="animate-spin">⚙️</span>
+                      <p>We're currently analyzing your bill for coding errors, bundling violations, and overcharges…</p>
+                    </div>
                   )}
                 </div>
               )}
@@ -650,6 +1191,9 @@ export default function Cases() {
           </div>
         </div>
       </div>
+      {renderDeleteModal()}
+      {renderDocDeleteModal()}
+    </>
     )
   }
 
@@ -658,7 +1202,7 @@ export default function Cases() {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <button
-          onClick={() => setView("list")}
+          onClick={() => navigate("/cases")}
           className="text-sm text-gray-500 hover:text-gray-700 mb-6 flex items-center gap-1"
         >
           ← Back to cases
@@ -784,7 +1328,7 @@ export default function Cases() {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <button
-          onClick={() => setView("new-info")}
+          onClick={() => setWizardStep("info")}
           className="text-sm text-gray-500 hover:text-gray-700 mb-6 flex items-center gap-1"
         >
           ← Back to details
@@ -811,7 +1355,7 @@ export default function Cases() {
           {totalBilled && <div><strong>Billed:</strong> ${Number(totalBilled).toLocaleString()}</div>}
           <button
             type="button"
-            onClick={() => setView("new-info")}
+            onClick={() => setWizardStep("info")}
             className="text-blue-600 hover:underline text-xs mt-1"
           >
             Edit details
@@ -855,11 +1399,19 @@ export default function Cases() {
             </label>
           </div>
 
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center justify-between">
+              <span>{error}</span>
+              <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 text-xs font-bold">✕</button>
+            </div>
+          )}
+
           <button
             type="submit"
-            className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
+            disabled={uploading}
+            className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
           >
-            Submit Bill for Review
+            {uploading ? "Uploading…" : "Submit Bill for Review"}
           </button>
         </form>
       </div>
@@ -867,68 +1419,167 @@ export default function Cases() {
   }
 
   // ─── Case List (default) ───
-  return (
-    <div className="max-w-2xl mx-auto p-8">
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold">My Bill Reviews</h1>
-        <button
-          onClick={() => { resetForm(); setView("new-info") }}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
-        >
-          + Review a Bill
-        </button>
-      </div>
+  const billingCases = cases.filter(c => c.caseType === "billing" || !c.caseType)
+  const priorAuthCases = cases.filter(c => c.caseType === "prior_auth")
+  const physicianCases = cases.filter(c => c.caseType === "physician")
 
-      {cases.length === 0 ? (
-        <div className="text-center py-16 border-2 border-dashed rounded-lg">
-          <div className="text-4xl mb-4">📋</div>
-          <h2 className="text-lg font-semibold mb-2">No bills reviewed yet</h2>
-          <p className="text-gray-500 text-sm mb-6">
-            Upload a medical bill and we'll investigate it for errors, overcharges,
-            and charity care eligibility.
+  function renderCaseCard(c: LocalCase) {
+    const sc = statusConfig[c.status] ?? statusConfig.uploaded
+    return (
+      <div
+        key={c.id}
+        className="w-full text-left border rounded-lg p-4 hover:bg-gray-50 transition flex items-center justify-between group"
+      >
+        <button
+          onClick={() => { setExtractedCodes(null); setAnalysisResult(null); navigate(`/cases/${c.id}`) }}
+          className="flex-1 min-w-0 text-left"
+        >
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-semibold text-sm">
+              {c.provider || "Unnamed Provider"}
+            </span>
+            <span className={`text-xs px-2 py-0.5 rounded-full ${sc.color}`}>
+              {sc.label}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            {c.state} · {new Date(c.createdAt).toLocaleDateString()}
           </p>
+        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="text-right">
+            {c.totalBilled != null && (
+              <span className="font-semibold text-sm">
+                ${c.totalBilled.toLocaleString()}
+              </span>
+            )}
+            {c.savingsFound > 0 && (
+              <p className="text-xs text-green-600 font-medium">
+                ${c.savingsFound.toLocaleString()} savings
+              </p>
+            )}
+          </div>
           <button
-            onClick={() => { resetForm(); setView("new-info") }}
-            className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
+            onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(c.id) }}
+            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all p-1 rounded"
+            title="Delete case"
           >
-            Review Your First Bill
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto p-8">
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold">My Cases</h1>
+      </div>
+
+      {loadingList ? (
+        <div className="text-center py-16">
+          <p className="text-gray-500 text-sm">Loading your cases…</p>
+        </div>
+      ) : cases.length === 0 ? (
+        <div className="text-center py-16 border-2 border-dashed rounded-lg">
+          <h2 className="text-lg font-semibold mb-2">No cases yet</h2>
+          <p className="text-gray-500 text-sm mb-6">
+            Upload a medical bill or prior authorization denial and we'll investigate it for errors,
+            overcharges, and charity care eligibility.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => { resetForm(); navigate("/cases/new") }}
+              className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
+            >
+              Review Your First Bill
+            </button>
+            <button
+              onClick={() => { resetForm(); navigate("/cases/new?type=prior_auth") }}
+              className="bg-violet-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors"
+            >
+              Review a Prior Auth
+            </button>
+          </div>
+        </div>
       ) : (
-        <div className="space-y-3">
-          {cases.map((c) => {
-            const sc = statusConfig[c.status] ?? statusConfig.pending
-            return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Left column — Billing disputes */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                Billing Disputes
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                  {billingCases.length}
+                </span>
+              </h2>
               <button
-                key={c.id}
-                onClick={() => { setSelectedId(c.id); setView("detail") }}
-                className="w-full text-left border rounded-lg p-4 hover:bg-gray-50 transition flex items-center justify-between"
+                onClick={() => { resetForm(); navigate("/cases/new") }}
+                className="text-sm font-medium text-blue-600 hover:text-blue-800"
               >
-                <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="font-semibold text-sm">
-                      {c.provider || "Unnamed Provider"}
-                    </span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${sc.color}`}>
-                      {sc.label}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    {c.state} · {new Date(c.createdAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="text-right shrink-0">
-                  {c.totalBilled != null && (
-                    <span className="font-semibold text-sm">
-                      ${c.totalBilled.toLocaleString()}
-                    </span>
-                  )}
-                </div>
+                + Bill Review
               </button>
-            )
-          })}
+            </div>
+            {billingCases.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed rounded-lg">
+                <p className="text-sm text-gray-400">No billing cases yet.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {billingCases.map(renderCaseCard)}
+              </div>
+            )}
+          </div>
+
+          {/* Right column — Prior Auth / Physician cases */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                Prior Authorization Disputes
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                  {priorAuthCases.length}
+                </span>
+              </h2>
+              <button
+                onClick={() => { resetForm(); navigate("/cases/new") }}
+                className="text-sm font-medium text-blue-600 hover:text-blue-800"
+              >
+                + Prior Auth
+              </button>
+            </div>
+            {priorAuthCases.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed rounded-lg">
+                <p className="text-sm text-gray-400">No prior auth cases yet.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {priorAuthCases.map(renderCaseCard)}
+              </div>
+            )}
+
+            {/* Physician cases if any */}
+            {physicianCases.length > 0 && (
+              <>
+                <h2 className="text-lg font-semibold mb-3 mt-8 flex items-center gap-2">
+                  Physician
+                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                    {physicianCases.length}
+                  </span>
+                </h2>
+                <div className="space-y-3">
+                  {physicianCases.map(renderCaseCard)}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
+
+      {renderDeleteModal()}
+      {renderDocDeleteModal()}
     </div>
   )
 }

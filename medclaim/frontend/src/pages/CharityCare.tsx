@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { Link } from "react-router-dom"
 import {
   ComposableMap,
@@ -9,6 +9,28 @@ import { charityCareData, type CharityCareState } from "@/data/charityCare"
 import { fipsToState } from "@/data/fips"
 
 const GEO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json"
+
+// 2024 Federal Poverty Level guidelines (48 contiguous states + DC)
+// Source: https://aspe.hhs.gov/poverty-guidelines
+const FPL_BASE = 15060      // base for household of 1
+const FPL_PER_PERSON = 5380 // added per additional person
+// Alaska and Hawaii have higher FPL levels
+const FPL_BASE_AK = 18810
+const FPL_PER_PERSON_AK = 6730
+const FPL_BASE_HI = 17310
+const FPL_PER_PERSON_HI = 6190
+
+function getFplAmount(householdSize: number, state?: string): number {
+  const size = Math.max(1, householdSize)
+  if (state === "AK") return FPL_BASE_AK + FPL_PER_PERSON_AK * (size - 1)
+  if (state === "HI") return FPL_BASE_HI + FPL_PER_PERSON_HI * (size - 1)
+  return FPL_BASE + FPL_PER_PERSON * (size - 1)
+}
+
+function getFplPercent(income: number, householdSize: number, state?: string): number {
+  const fpl = getFplAmount(householdSize, state)
+  return Math.round((income / fpl) * 100)
+}
 
 // All state abbreviations for the mobile dropdown
 const ALL_STATES = Object.values(charityCareData).sort((a, b) =>
@@ -26,6 +48,36 @@ function getStateColor(st: CharityCareState | undefined): string {
 
 export default function CharityCare() {
   const [selected, setSelected] = useState<CharityCareState | null>(null)
+
+  // Calculator state
+  const [calcHousehold, setCalcHousehold] = useState("")
+  const [calcIncome, setCalcIncome] = useState("")
+  const [calcState, setCalcState] = useState("")
+
+  const calcResult = useMemo(() => {
+    const hs = parseInt(calcHousehold)
+    const inc = parseFloat(calcIncome)
+    if (!hs || hs < 1 || !inc || inc < 0) return null
+
+    const pct = getFplPercent(inc, hs, calcState || undefined)
+    const stateData = calcState ? charityCareData[calcState] : null
+
+    // Federal: most nonprofit FAPs cover 200% FPL for free, up to 400% for reduced
+    const federalFree = pct <= 200
+    const federalReduced = pct <= 400
+
+    // State-specific thresholds
+    let stateFree = false
+    let stateReduced = false
+    let stateName = ""
+    if (stateData) {
+      stateName = stateData.name
+      if (stateData.fplThreshold && pct <= stateData.fplThreshold) stateFree = true
+      if (stateData.reducedCareThreshold && pct <= stateData.reducedCareThreshold) stateReduced = true
+    }
+
+    return { pct, federalFree, federalReduced, stateFree, stateReduced, stateData, stateName, fplDollar: getFplAmount(hs, calcState || undefined) }
+  }, [calcHousehold, calcIncome, calcState])
 
   function handleStateClick(stateAbbrev: string) {
     const data = charityCareData[stateAbbrev]
@@ -197,6 +249,8 @@ export default function CharityCare() {
               <ol className="text-sm space-y-1 list-decimal list-inside mb-4">
                 <li>Ask the hospital for their Financial Assistance Policy</li>
                 <li>Complete the hospital's financial assistance application</li>
+                <li>Request an itemized bill — just asking for one often causes charges to drop</li>
+                <li><Link to="/documents" className="text-blue-600 hover:underline">See what documents to request</Link> and why they matter</li>
               </ol>
 
               <Link
@@ -242,13 +296,199 @@ export default function CharityCare() {
         </div>
       </div>
 
+      {/* ═══ FPL CALCULATOR ═══ */}
+      <div id="calculator" className="mb-16">
+        <h2 className="text-2xl font-bold text-center mb-2">
+          Check If You Qualify
+        </h2>
+        <p className="text-center text-gray-600 mb-6 max-w-2xl mx-auto">
+          Enter your household info to see if you may be eligible for free or reduced-cost hospital care.
+        </p>
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-8 max-w-2xl mx-auto text-sm text-gray-700">
+          <strong>This is the single most important thing you can do.</strong> Applying for financial assistance (the hospital's FAP) can eliminate your entire bill — and it's more likely to help you than finding coding errors or negotiating.
+          Call the hospital's billing department and ask for their Financial Assistance Program application. Fill it out and send it back to them.
+        </div>
+
+        <div className="max-w-2xl mx-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Household Size</label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                placeholder="e.g. 4"
+                value={calcHousehold}
+                onChange={(e) => setCalcHousehold(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Annual Income</label>
+              <div className="relative">
+                <span className="absolute left-3 top-2 text-gray-400 text-sm">$</span>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 45000"
+                  value={calcIncome}
+                  onChange={(e) => setCalcIncome(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg pl-7 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">State <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select
+                value={calcState}
+                onChange={(e) => setCalcState(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">— Select state —</option>
+                {ALL_STATES.map((s) => (
+                  <option key={s.state} value={s.state}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Results */}
+          {calcResult && (
+            <div className="border rounded-lg overflow-hidden">
+              {/* FPL bar */}
+              <div className="p-5">
+                <div className="flex items-baseline justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Your Federal Poverty Level</span>
+                  <span className="text-2xl font-bold text-gray-900">{calcResult.pct}% FPL</span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-3 mb-1">
+                  <div
+                    className={`h-3 rounded-full transition-all duration-500 ${
+                      calcResult.pct <= 200 ? "bg-green-400" : calcResult.pct <= 400 ? "bg-yellow-400" : "bg-red-400"
+                    }`}
+                    style={{ width: `${Math.min(calcResult.pct / 5, 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-400 mb-4">
+                  <span>0%</span>
+                  <span>200% (free care)</span>
+                  <span>400% (reduced)</span>
+                  <span>500%+</span>
+                </div>
+
+                <p className="text-xs text-gray-500">
+                  The FPL for a household of {calcHousehold} is <strong>${calcResult.fplDollar.toLocaleString()}/year</strong>.
+                  Your income of <strong>${parseFloat(calcIncome).toLocaleString()}</strong> puts you at <strong>{calcResult.pct}%</strong> of that level.
+                </p>
+              </div>
+
+              {/* Eligibility results */}
+              <div className="border-t bg-gray-50 p-5 space-y-3">
+                {/* Federal eligibility */}
+                {calcResult.federalFree ? (
+                  <div className="flex items-start gap-2">
+                    <span className="text-green-500 text-lg leading-none mt-0.5">✅</span>
+                    <p className="text-sm text-gray-700">
+                      <strong>You very likely qualify for free care</strong> at nonprofit hospitals under federal law. Most hospitals' Financial Assistance Policies cover patients at or below 200% FPL.
+                    </p>
+                  </div>
+                ) : calcResult.federalReduced ? (
+                  <div className="flex items-start gap-2">
+                    <span className="text-yellow-500 text-lg leading-none mt-0.5">🟡</span>
+                    <p className="text-sm text-gray-700">
+                      <strong>You may qualify for reduced-cost care</strong> at nonprofit hospitals. Many FAPs offer sliding-scale discounts up to 400% FPL.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <span className="text-gray-400 text-lg leading-none mt-0.5">ℹ️</span>
+                    <p className="text-sm text-gray-700">
+                      At {calcResult.pct}% FPL, you're above the typical FAP threshold — but it's still worth applying. Some hospitals have higher limits, and you can always negotiate.
+                    </p>
+                  </div>
+                )}
+
+                {/* State-specific eligibility */}
+                {calcResult.stateData && (
+                  <>
+                    {calcResult.stateFree ? (
+                      <div className="flex items-start gap-2">
+                        <span className="text-green-500 text-lg leading-none mt-0.5">✅</span>
+                        <p className="text-sm text-gray-700">
+                          <strong>{calcResult.stateName} state law</strong> requires hospitals to provide free care at your income level
+                          {calcResult.stateData.fplThreshold && ` (covers up to ${calcResult.stateData.fplThreshold}% FPL)`}.
+                          {calcResult.stateData.hasMandatoryCharityCare && " This applies to all hospitals, not just nonprofits."}
+                        </p>
+                      </div>
+                    ) : calcResult.stateReduced ? (
+                      <div className="flex items-start gap-2">
+                        <span className="text-yellow-500 text-lg leading-none mt-0.5">🟡</span>
+                        <p className="text-sm text-gray-700">
+                          <strong>{calcResult.stateName}</strong> offers reduced-cost care up to {calcResult.stateData.reducedCareThreshold}% FPL. You qualify for discounted rates under state law.
+                        </p>
+                      </div>
+                    ) : calcResult.stateData.hasMandatoryCharityCare ? (
+                      <div className="flex items-start gap-2">
+                        <span className="text-gray-400 text-lg leading-none mt-0.5">ℹ️</span>
+                        <p className="text-sm text-gray-700">
+                          {calcResult.stateName} has charity care laws, but your income is above the state threshold. Federal FAP protections at nonprofit hospitals still apply.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <span className="text-gray-400 text-lg leading-none mt-0.5">ℹ️</span>
+                        <p className="text-sm text-gray-700">
+                          {calcResult.stateName} doesn't have a state charity care mandate, but federal law still requires every nonprofit hospital to have a Financial Assistance Policy.
+                        </p>
+                      </div>
+                    )}
+
+                    {calcResult.stateData.collectionsProtections && (
+                      <div className="flex items-start gap-2">
+                        <span className="text-blue-500 text-lg leading-none mt-0.5">🛡️</span>
+                        <p className="text-sm text-gray-700">
+                          {calcResult.stateName} has <strong>collections protections</strong> — limits on wage garnishment, liens, or aggressive collection actions for medical debt.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* CTA */}
+                <div className="pt-3 space-y-3">
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p className="text-sm text-gray-800 font-semibold mb-1">📞 Your most important next step</p>
+                    <p className="text-sm text-gray-700">
+                      Call the hospital's billing department and ask for their <strong>Financial Assistance Program (FAP) application</strong>. Fill it out and send it back to them. This alone can reduce or eliminate your entire bill.
+                    </p>
+                  </div>
+                  <Link
+                    to="/cases"
+                    className="inline-block bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                  >
+                    Submit my bill for review →
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!calcResult && (
+            <div className="border-2 border-dashed rounded-lg p-8 text-center text-gray-400 text-sm">
+              Enter your household size and income above to see your results.
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ═══ WARNINGS SECTION ═══ */}
       <div id="warnings" className="mb-16">
         <h2 className="text-2xl font-bold text-center mb-2">
           Before You Pay Anything
         </h2>
         <p className="text-center text-gray-600 mb-8 max-w-2xl mx-auto">
-          Three things every patient with a medical bill should know right now.
+          Three things you should know before doing anything with a medical bill.
         </p>
 
         <div className="grid md:grid-cols-3 gap-6">
@@ -264,7 +504,7 @@ export default function CharityCare() {
             <ul className="text-sm space-y-1.5">
               <li className="flex gap-2">
                 <span className="text-blue-500">→</span>
-                Request an itemized bill (not just a summary)
+                Request an itemized bill (not just a summary) — just asking often causes charges to drop
               </li>
               <li className="flex gap-2">
                 <span className="text-blue-500">→</span>
@@ -315,7 +555,7 @@ export default function CharityCare() {
             </h3>
             <p className="text-sm text-gray-700 mb-3">
               Medical debt has special protections. It's often better to let a
-              bill go to collections than to overpay or sign predatory financing like CareCredit.
+              bill go to collections than to sign predatory financing like CareCredit.
             </p>
             <ul className="text-sm space-y-1.5">
               <li className="flex gap-2">

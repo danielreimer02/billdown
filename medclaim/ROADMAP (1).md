@@ -13,6 +13,8 @@ One end goal: the only platform that represents both patients AND physicians aga
 - Check charity care eligibility by income + state
 - Generate dispute letter with legal citations
 - Charge success fee on savings
+- Add Good Faith estimate to protect yourself in future and in review bills and home page and getting started I think its no surprises act
+- add were these cpts are appropriate given the icds ie what cpts do you get from uploaded icds 
 
 ---
 
@@ -24,6 +26,7 @@ One end goal: the only platform that represents both patients AND physicians aga
 - Translate denial reason codes (CO-4, CO-97, etc.) into plain English
 - Flag wrongful denials using LCD coverage data
 - Generate appeal letters citing specific LCD numbers
+- Use EOB and NPI(doctor identifier) to see if surprise out of network bill then cite No Surprises Act
 
 ---
 
