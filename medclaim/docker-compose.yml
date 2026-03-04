@@ -1,36 +1,28 @@
-version: "3.9"
+x-data-volumes: &data-volumes
+  - ../lcd_analysis:/data/lcd_analysis
+  - ../ptp_analysis:/data/ptp_analysis
+  - ../pfs_analysis:/data/pfs_analysis
+  - ../mue_analysis:/data/mue_analysis
+
+x-backend-env: &backend-env
+  - DATABASE_URL=postgresql://medclaim:medclaim@postgres:5432/medclaim
+  - SECRET_KEY=dev-secret-change-in-production
+  - ENVIRONMENT=development
+  - LCD_DATA_DIR=/data/lcd_analysis/all_data
+  - PTP_DATA_DIR=/data/ptp_analysis/extracted
+  - MUE_DATA_DIR=/data/mue_analysis/extracted
+  - PFS_DATA_DIR=/data/pfs_analysis
+  - AWS_ACCESS_KEY_ID=test
+  - AWS_SECRET_ACCESS_KEY=test
+  - AWS_REGION=us-east-1
+  - S3_ENDPOINT_URL=http://localstack:4566
 
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - ../lcd_analysis:/data/lcd_analysis
-      - ../ptp_analysis:/data/ptp_analysis
-      - ../pfs_analysis:/data/pfs_analysis
-      - ../mue_analysis:/data/mue_analysis
-    environment:
-      - DATABASE_URL=postgresql://medclaim:medclaim@postgres:5432/medclaim
-      - SECRET_KEY=dev-secret-change-in-production
-      - ENVIRONMENT=development
-      - LCD_DATA_DIR=/data/lcd_analysis/all_data
-      - PTP_DATA_DIR=/data/ptp_analysis/extracted
-      - MUE_DATA_DIR=/data/mue_analysis/extracted
-      - PFS_DATA_DIR=/data/pfs_analysis
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_REGION=us-east-1
-      - S3_ENDPOINT_URL=http://localstack:4566
-    depends_on:
-      postgres:
-        condition: service_healthy
-      localstack:
-        condition: service_started
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
+  # ──────────────────────────────────────────────
+  # Shared infrastructure (starts with any profile)
+  # ──────────────────────────────────────────────
   postgres:
+    profiles: ["dev", "prod", "deploy"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: medclaim
@@ -47,6 +39,7 @@ services:
       retries: 5
 
   localstack:
+    profiles: ["dev", "prod", "deploy"]
     image: localstack/localstack:3
     ports:
       - "4566:4566"
@@ -57,6 +50,79 @@ services:
     volumes:
       - localstack_data:/var/lib/localstack
       - ./infra/localstack-init.sh:/etc/localstack/init/ready.d/init-s3.sh
+
+  # ──────────────────────────────────────────────
+  # Backend (dev + prod: hot reload, deploy: workers)
+  # ──────────────────────────────────────────────
+  backend:
+    profiles: ["dev", "prod"]
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ../lcd_analysis:/data/lcd_analysis
+      - ../ptp_analysis:/data/ptp_analysis
+      - ../pfs_analysis:/data/pfs_analysis
+      - ../mue_analysis:/data/mue_analysis
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  backend-deploy:
+    profiles: ["deploy"]
+    build: ./backend
+    volumes: *data-volumes
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+  # ──────────────────────────────────────────────
+  # Frontend
+  # ──────────────────────────────────────────────
+
+  # Dev: Vite dev server with hot reload
+  frontend-dev:
+    profiles: ["dev"]
+    build:
+      context: ./frontend
+      target: build
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - backend
+
+  # Prod: nginx on :3000 (local testing)
+  frontend-prod:
+    profiles: ["prod"]
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  # Deploy: nginx on :80 (droplet)
+  frontend-deploy:
+    profiles: ["deploy"]
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend-deploy
 
 volumes:
   postgres_data:
