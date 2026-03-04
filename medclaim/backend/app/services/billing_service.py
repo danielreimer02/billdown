@@ -429,39 +429,65 @@ def check_price_single(
 def check_prices_batch(
     lines: list[BillLine],
     state: str = "",
+    locality: str = "",
     setting: str = "hospital",
     threshold: float = PRICE_FLAG_THRESHOLD,
 ) -> list[PriceFlag]:
-    """Check all bill lines against Medicare rates. One query for RVUs, one for GPCI."""
+    """Check all bill lines against Medicare rates. Uses per-component RVU×GPCI when locality available."""
     cpt_codes = tuple(set(l.cpt_code for l in lines))
     if not cpt_codes:
         return []
 
     try:
         with engine.connect() as conn:
-            # Get RVUs for all CPTs
-            rows = conn.execute(PFS_NATIONAL_QUERY, {"cpts": cpt_codes}).fetchall()
-            rvu_map = {}
-            for r in rows:
-                use_facility = setting in ("hospital", "facility")
-                total = r.facility_total if use_facility else r.nonfac_total
-                cf = r.conv_factor or CMS_CF
-                rvu_map[r.hcpcs] = (total, cf)
+            # Get RVU components for all CPTs
+            rvu_rows = conn.execute(text("""
+                SELECT hcpcs, work_rvu, nonfac_pe_rvu, facility_pe_rvu, mp_rvu,
+                       nonfac_total, facility_total, conv_factor, description
+                FROM pfs_rvu
+                WHERE hcpcs IN :cpts
+                  AND modifier IS NULL
+                  AND nonfac_total > 0
+            """), {"cpts": cpt_codes}).fetchall()
 
-            # Get GPCI multiplier if state provided
-            gpci_mult = 1.0  # default: no locality adjustment
+            use_facility = setting in ("hospital", "facility")
+
+            # Get GPCI values
+            gpci = None
             if state:
-                gpci_row = conn.execute(GPCI_QUERY, {"state": state.upper()}).first()
+                if locality:
+                    gpci_row = conn.execute(text("""
+                        SELECT pw_gpci, pe_gpci, mp_gpci, locality_name
+                        FROM gpci_locality
+                        WHERE state = :state AND locality_number = :locality
+                        LIMIT 1
+                    """), {"state": state.upper(), "locality": locality}).first()
+                else:
+                    gpci_row = conn.execute(GPCI_QUERY, {"state": state.upper()}).first()
                 if gpci_row:
-                    # Simplified: use average of the 3 GPCIs as overall multiplier
-                    # More accurate would be per-component, but this is close enough
-                    # for flagging purposes (overcharge detection, not payment calc)
-                    gpci_mult = (gpci_row.pw_gpci + gpci_row.pe_gpci + gpci_row.mp_gpci) / 3.0
+                    gpci = {
+                        "pw": gpci_row.pw_gpci,
+                        "pe": gpci_row.pe_gpci,
+                        "mp": gpci_row.mp_gpci,
+                    }
 
-            # Build rate map: CPT → estimated Medicare payment
+            # Build rate map: CPT → Medicare payment (per-component if GPCI available)
             rate_map = {}
-            for hcpcs, (total_rvu, cf) in rvu_map.items():
-                rate_map[hcpcs] = total_rvu * cf * gpci_mult
+            for r in rvu_rows:
+                cf = r.conv_factor or CMS_CF
+                if gpci:
+                    # Accurate per-component formula:
+                    # Payment = (Work_RVU × PW_GPCI + PE_RVU × PE_GPCI + MP_RVU × MP_GPCI) × CF
+                    pe_rvu = r.facility_pe_rvu if use_facility else r.nonfac_pe_rvu
+                    payment = _compute_payment(
+                        r.work_rvu, pe_rvu, r.mp_rvu,
+                        gpci["pw"], gpci["pe"], gpci["mp"], cf,
+                    )
+                else:
+                    # National fallback: total RVU × CF
+                    total = r.facility_total if use_facility else r.nonfac_total
+                    payment = total * cf
+                rate_map[r.hcpcs] = round(payment, 2)
 
             flags = []
             for line in lines:
@@ -494,6 +520,7 @@ def check_prices_batch(
 def analyze_bill(
     lines: list[BillLine],
     state: str = "",
+    locality: str = "",
     setting: str = "hospital",
     price_threshold: float = PRICE_FLAG_THRESHOLD,
 ) -> BillAnalysisResult:
@@ -517,11 +544,14 @@ def analyze_bill(
 
     # 3. Price check
     result.price_flags = check_prices_batch(
-        lines, state=state, setting=setting, threshold=price_threshold,
+        lines, state=state, locality=locality, setting=setting, threshold=price_threshold,
     )
 
     # Estimate total overcharge
     overcharge = 0.0
+
+    # Track CPTs already counted so we don't double-count
+    counted_cpts: set[str] = set()
 
     # Bundled items: the smaller CPT's charge is the overcharge
     bundled_cpts = set()
@@ -531,17 +561,25 @@ def analyze_bill(
     for line in lines:
         if line.cpt_code in bundled_cpts:
             overcharge += line.charge
+            counted_cpts.add(line.cpt_code)
 
     # MUE violations: charge for excess units
+    # (skip CPTs already fully counted from bundling)
     for flag in result.mue_flags:
+        if flag.cpt_code in counted_cpts:
+            continue
         matching_line = next((l for l in lines if l.cpt_code == flag.cpt_code), None)
         if matching_line and matching_line.charge > 0:
             per_unit = matching_line.charge / matching_line.units
             excess_units = flag.billed_units - flag.max_units
             overcharge += per_unit * excess_units
+            counted_cpts.add(flag.cpt_code)
 
     # Price flags: difference between charged and reasonable rate (3x Medicare)
+    # (skip CPTs already fully counted from bundling or MUE)
     for flag in result.price_flags:
+        if flag.cpt_code in counted_cpts:
+            continue
         reasonable = flag.medicare_rate * price_threshold
         if flag.charged > reasonable:
             overcharge += flag.charged - reasonable

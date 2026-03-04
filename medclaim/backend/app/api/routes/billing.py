@@ -13,6 +13,7 @@ Debug endpoints:
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy import text
 
 from app.services.billing_service import (
     BillLine,
@@ -22,6 +23,7 @@ from app.services.billing_service import (
     check_price_single,
     get_localities,
 )
+from app.db.session import engine
 
 router = APIRouter()
 
@@ -208,3 +210,109 @@ async def pfs_rate(
             f"({result['source']})"
         ),
     }
+
+
+# ─────────────────────────────────────────
+# CODE DESCRIPTION LOOKUPS
+# ─────────────────────────────────────────
+
+@router.get("/cpt-description")
+async def cpt_description(
+    cpt: str = Query(..., description="CPT/HCPCS code e.g. 27447"),
+):
+    """
+    Look up the CMS description for a CPT/HCPCS code from the Physician Fee Schedule.
+    Returns the official Medicare description and basic RVU info.
+    """
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT hcpcs, description, status_code,
+                           work_rvu, nonfac_pe_rvu, facility_pe_rvu, mp_rvu,
+                           nonfac_total, facility_total
+                    FROM pfs_rvu
+                    WHERE hcpcs = :hcpcs AND modifier IS NULL
+                    LIMIT 1
+                """),
+                {"hcpcs": cpt.strip()},
+            ).first()
+
+            if not row:
+                return {
+                    "cptCode": cpt,
+                    "description": None,
+                    "message": f"No description found for CPT {cpt}",
+                }
+
+            return {
+                "cptCode": row.hcpcs,
+                "description": row.description,
+                "statusCode": row.status_code,
+                "workRvu": row.work_rvu,
+                "nonfacPeRvu": row.nonfac_pe_rvu,
+                "facilityPeRvu": row.facility_pe_rvu,
+                "mpRvu": row.mp_rvu,
+                "nonfacTotal": row.nonfac_total,
+                "facilityTotal": row.facility_total,
+                "message": f"{cpt}: {row.description}",
+            }
+    except Exception as e:
+        return {
+            "cptCode": cpt,
+            "description": None,
+            "message": f"Lookup failed: {str(e)}",
+        }
+
+
+@router.get("/icd10-description")
+async def icd10_description(
+    icd10: str = Query(..., description="ICD-10 code e.g. M17.11"),
+):
+    """
+    Look up the description for an ICD-10 code from the LCD coverage database.
+    Searches both covered and noncovered ICD-10 tables for the description.
+    """
+    try:
+        with engine.connect() as conn:
+            # Try covered codes first (larger dataset, more likely to have it)
+            row = conn.execute(
+                text("""
+                    SELECT DISTINCT icd10_code_id, description
+                    FROM article_x_icd10_covered
+                    WHERE icd10_code_id = :icd10 AND description IS NOT NULL AND description != ''
+                    LIMIT 1
+                """),
+                {"icd10": icd10.strip().upper()},
+            ).first()
+
+            if not row:
+                # Try noncovered codes
+                row = conn.execute(
+                    text("""
+                        SELECT DISTINCT icd10_code_id, description
+                        FROM article_x_icd10_noncovered
+                        WHERE icd10_code_id = :icd10 AND description IS NOT NULL AND description != ''
+                        LIMIT 1
+                    """),
+                    {"icd10": icd10.strip().upper()},
+                ).first()
+
+            if not row:
+                return {
+                    "icd10Code": icd10,
+                    "description": None,
+                    "message": f"No description found for ICD-10 {icd10}",
+                }
+
+            return {
+                "icd10Code": row.icd10_code_id,
+                "description": row.description,
+                "message": f"{row.icd10_code_id}: {row.description}",
+            }
+    except Exception as e:
+        return {
+            "icd10Code": icd10,
+            "description": None,
+            "message": f"Lookup failed: {str(e)}",
+        }

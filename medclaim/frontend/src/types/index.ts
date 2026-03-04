@@ -73,6 +73,7 @@ export interface Case {
   caseType: CaseType
   status: CaseStatus
   state: string
+  locality?: string
   providerName?: string
   serviceDate?: string
   totalBilled?: number
@@ -180,7 +181,9 @@ export interface ExtractedCodesResponse {
   caseId: string
   lineItems: Array<{
     id: string
+    documentId: string | null
     cptCode: string
+    cptDescription: string | null
     icd10Codes: string[]
     units: number
     amountBilled: number | null

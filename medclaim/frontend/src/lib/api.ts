@@ -69,7 +69,8 @@ export const casesApi = {
 
   create: (payload: {
     caseType?: CaseType
-    state: string
+    state?: string
+    locality?: string
     householdSize?: number
     annualIncome?: number
     providerName?: string
@@ -81,6 +82,7 @@ export const casesApi = {
       body: JSON.stringify({
         case_type: payload.caseType ?? "billing",
         state: payload.state,
+        locality: payload.locality,
         household_size: payload.householdSize,
         annual_income: payload.annualIncome,
         provider_name: payload.providerName,
@@ -91,6 +93,7 @@ export const casesApi = {
 
   update: (id: string, payload: {
     state?: string
+    locality?: string
     householdSize?: number
     annualIncome?: number
     providerName?: string
@@ -102,6 +105,7 @@ export const casesApi = {
       method: "PATCH",
       body: JSON.stringify({
         ...(payload.state !== undefined && { state: payload.state }),
+        ...(payload.locality !== undefined && { locality: payload.locality }),
         ...(payload.householdSize !== undefined && { household_size: payload.householdSize }),
         ...(payload.annualIncome !== undefined && { annual_income: payload.annualIncome }),
         ...(payload.providerName !== undefined && { provider_name: payload.providerName }),
@@ -162,6 +166,7 @@ export const documentsApi = {
     caseId: string,
     lineItems: Array<{
       id?: string
+      documentId?: string | null
       cptCode: string
       icd10Codes: string[]
       units: number
@@ -178,6 +183,55 @@ export const documentsApi = {
 
   delete: (caseId: string, documentId: string) =>
     request<void>(`/api/cases/${caseId}/documents/${documentId}`, { method: "DELETE" }),
+}
+
+
+// ─────────────────────────────────────────
+// LINE ITEMS (individual CRUD)
+// ─────────────────────────────────────────
+
+export interface LineItemPayload {
+  id: string
+  documentId: string | null
+  cptCode: string
+  cptDescription: string | null
+  icd10Codes: string[]
+  units: number
+  amountBilled: number | null
+  userConfirmed: boolean
+}
+
+export const lineItemsApi = {
+  create: (caseId: string, payload: {
+    documentId?: string
+    cptCode: string
+    cptDescription?: string
+    icd10Codes?: string[]
+    units?: number
+    amountBilled?: number | null
+  }) =>
+    request<LineItemPayload>(`/api/cases/${caseId}/line-items`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  update: (caseId: string, lineItemId: string, payload: {
+    cptCode?: string
+    cptDescription?: string
+    icd10Codes?: string[]
+    units?: number
+    amountBilled?: number | null
+  }) =>
+    request<LineItemPayload>(`/api/cases/${caseId}/line-items/${lineItemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  delete: (caseId: string, lineItemId: string) =>
+    request<{ status: string; lineItemId: string }>(
+      `/api/cases/${caseId}/line-items/${lineItemId}`,
+      { method: "DELETE" }
+    ),
 }
 
 
@@ -256,6 +310,29 @@ export const billingApi = {
       message: string
     }>(`/api/billing/pfs/rate?${params.toString()}`)
   },
+
+  /** Look up CMS description for a CPT/HCPCS code */
+  cptDescription: (cpt: string) =>
+    request<{
+      cptCode: string
+      description: string | null
+      statusCode?: string
+      workRvu?: number
+      nonfacPeRvu?: number
+      facilityPeRvu?: number
+      mpRvu?: number
+      nonfacTotal?: number
+      facilityTotal?: number
+      message: string
+    }>(`/api/billing/cpt-description?cpt=${encodeURIComponent(cpt)}`),
+
+  /** Look up description for an ICD-10 code */
+  icd10Description: (icd10: string) =>
+    request<{
+      icd10Code: string
+      description: string | null
+      message: string
+    }>(`/api/billing/icd10-description?icd10=${encodeURIComponent(icd10)}`),
 }
 
 
@@ -328,4 +405,64 @@ export const lcdApi = {
     }>(
       `/api/lcd/cpts-for-diagnosis?icd10_code=${params.icd10Code}&state=${params.state}`
     ),
+}
+
+
+// ─────────────────────────────────────────
+// LCD EXPLORER
+// ─────────────────────────────────────────
+
+export const lcdExplorerApi = {
+  /** Browse LCDs with search and pagination */
+  lcds: (params?: { search?: string; status?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.status) qs.set("status", params.status)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      lcds: Array<{
+        lcdId: number; version: number; title: string; status: string
+        displayId: string; determinationNumber: string; lastUpdated: string | null
+      }>
+    }>(`/api/lcd/explorer/lcds?${qs.toString()}`)
+  },
+
+  /** Get LCD detail by ID */
+  lcdDetail: (lcdId: number) =>
+    request<{
+      lcd: {
+        lcdId: number; version: number; title: string; status: string
+        displayId: string; determinationNumber: string; lastUpdated: string | null
+      }
+      articles: Array<{ articleId: number; version: number; title: string; status: string }>
+      cptCodes: Array<{ cptCode: string; shortDescription: string; longDescription: string; articleId: number }>
+      states: Array<{ abbrev: string; name: string }>
+    }>(`/api/lcd/explorer/lcd/${lcdId}`),
+
+  /** Browse articles with search and pagination */
+  articles: (params?: { search?: string; page?: number; pageSize?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.page) qs.set("page", String(params.page))
+    if (params?.pageSize) qs.set("page_size", String(params.pageSize))
+    return request<{
+      total: number; page: number; pageSize: number; totalPages: number
+      articles: Array<{
+        articleId: number; version: number; title: string; status: string; lastUpdated: string | null
+      }>
+    }>(`/api/lcd/explorer/articles?${qs.toString()}`)
+  },
+
+  /** Get article detail by ID */
+  articleDetail: (articleId: number) =>
+    request<{
+      article: { articleId: number; version: number; title: string; status: string; lastUpdated: string | null }
+      cptCodes: Array<{ cptCode: string; shortDescription: string; longDescription: string }>
+      coveredCodes: Array<{ icd10Code: string; group: number; description: string }>
+      coveredGroups: Array<{ group: number; paragraph: string }>
+      noncoveredCodes: Array<{ icd10Code: string; group: number; description: string }>
+      linkedLcds: Array<{ lcdId: number; title: string; status: string }>
+    }>(`/api/lcd/explorer/article/${articleId}`),
 }

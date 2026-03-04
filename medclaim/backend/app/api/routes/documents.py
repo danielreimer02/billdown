@@ -195,6 +195,7 @@ def _run_analysis_background(case_id: str):
         result = analyze_bill(
             lines=bill_lines,
             state=case.state or "",
+            locality=case.locality or "",
             setting=setting,
         )
 
@@ -435,7 +436,9 @@ def get_extracted_codes(case_id: str, db: Session = Depends(get_db)):
         "lineItems": [
             {
                 "id": li.id,
+                "documentId": li.document_id,
                 "cptCode": li.cpt_code,
+                "cptDescription": li.cpt_description,
                 "icd10Codes": li.icd10_codes or [],
                 "units": li.units,
                 "amountBilled": li.amount_billed,
@@ -448,6 +451,7 @@ def get_extracted_codes(case_id: str, db: Session = Depends(get_db)):
 
 class ConfirmLineItem(BaseModel):
     id: Optional[str] = None
+    documentId: Optional[str] = None
     cptCode: str
     icd10Codes: list[str] = []
     units: int = 1
@@ -484,6 +488,7 @@ async def confirm_codes(
         li = LineItem(
             id=str(uuid.uuid4()),
             case_id=case_id,
+            document_id=item.documentId,
             cpt_code=item.cptCode,
             icd10_codes=item.icd10Codes,
             units=item.units,
@@ -500,6 +505,111 @@ async def confirm_codes(
         "status": "analyzing",
         "message": "Codes confirmed. Analysis is running.",
     }
+
+
+# -----------------------------------------------------------------
+# LINE ITEM CRUD (individual)
+# -----------------------------------------------------------------
+
+class LineItemCreate(BaseModel):
+    documentId: Optional[str] = None
+    cptCode: str
+    cptDescription: Optional[str] = None
+    icd10Codes: list[str] = []
+    units: int = 1
+    amountBilled: Optional[float] = None
+
+
+class LineItemUpdate(BaseModel):
+    cptCode: Optional[str] = None
+    cptDescription: Optional[str] = None
+    icd10Codes: Optional[list[str]] = None
+    units: Optional[int] = None
+    amountBilled: Optional[float] = None
+
+
+@router.post("/{case_id}/line-items")
+def create_line_item(case_id: str, req: LineItemCreate, db: Session = Depends(get_db)):
+    """Add a single line item to a case."""
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    li = LineItem(
+        id=str(uuid.uuid4()),
+        case_id=case_id,
+        document_id=req.documentId,
+        cpt_code=req.cptCode,
+        cpt_description=req.cptDescription,
+        icd10_codes=req.icd10Codes,
+        units=req.units,
+        amount_billed=req.amountBilled,
+        user_confirmed=False,
+    )
+    db.add(li)
+    db.commit()
+
+    return {
+        "id": li.id,
+        "documentId": li.document_id,
+        "cptCode": li.cpt_code,
+        "cptDescription": li.cpt_description,
+        "icd10Codes": li.icd10_codes or [],
+        "units": li.units,
+        "amountBilled": li.amount_billed,
+        "userConfirmed": li.user_confirmed,
+    }
+
+
+@router.patch("/{case_id}/line-items/{line_item_id}")
+def update_line_item(
+    case_id: str, line_item_id: str, req: LineItemUpdate, db: Session = Depends(get_db)
+):
+    """Update a single line item."""
+    li = db.query(LineItem).filter(
+        LineItem.id == line_item_id, LineItem.case_id == case_id
+    ).first()
+    if not li:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    if req.cptCode is not None:
+        li.cpt_code = req.cptCode
+    if req.cptDescription is not None:
+        li.cpt_description = req.cptDescription
+    if req.icd10Codes is not None:
+        li.icd10_codes = req.icd10Codes
+    if req.units is not None:
+        li.units = req.units
+    if req.amountBilled is not None:
+        li.amount_billed = req.amountBilled
+
+    db.commit()
+
+    return {
+        "id": li.id,
+        "documentId": li.document_id,
+        "cptCode": li.cpt_code,
+        "cptDescription": li.cpt_description,
+        "icd10Codes": li.icd10_codes or [],
+        "units": li.units,
+        "amountBilled": li.amount_billed,
+        "userConfirmed": li.user_confirmed,
+    }
+
+
+@router.delete("/{case_id}/line-items/{line_item_id}")
+def delete_line_item(case_id: str, line_item_id: str, db: Session = Depends(get_db)):
+    """Delete a single line item."""
+    li = db.query(LineItem).filter(
+        LineItem.id == line_item_id, LineItem.case_id == case_id
+    ).first()
+    if not li:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    db.delete(li)
+    db.commit()
+
+    return {"status": "deleted", "lineItemId": line_item_id}
 
 
 @router.get("/{case_id}/analysis")

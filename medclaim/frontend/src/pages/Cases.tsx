@@ -1,15 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { charityCareData } from "@/data/charityCare"
-import { casesApi, documentsApi, BASE_URL } from "@/lib/api"
+import { casesApi, documentsApi, billingApi, BASE_URL } from "@/lib/api"
+import StateSelect, { US_STATES } from "@/components/StateSelect"
 import type { CaseType, DocumentType, AnalysisResponse, ExtractedCodesResponse } from "@/types"
-
-const US_STATES = [
-  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
-  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-  "VA","WA","WV","WI","WY","DC",
-]
 
 // FPL calculation (2024 guidelines)
 const FPL_BASE = 15060
@@ -51,6 +45,7 @@ interface LocalCase {
   id: string
   caseType: CaseType
   state: string
+  locality: string
   provider: string
   totalBilled: number | null
   householdSize: number | null
@@ -75,6 +70,7 @@ function apiCaseToLocal(c: any): LocalCase {
     id: c.id,
     caseType: c.caseType ?? c.case_type ?? "billing",
     state: c.state || "",
+    locality: c.locality || "",
     provider: c.providerName || c.provider_name || "",
     totalBilled: c.totalBilled ?? c.total_billed ?? null,
     householdSize: c.householdSize ?? c.household_size ?? null,
@@ -219,6 +215,9 @@ export default function Cases() {
   const [editBilled, setEditBilled] = useState("")
   const [editHousehold, setEditHousehold] = useState("")
   const [editIncome, setEditIncome] = useState("")
+  const [editState, setEditState] = useState("")
+  const [editLocality, setEditLocality] = useState("")
+  const [localities, setLocalities] = useState<Array<{ localityNumber: string; localityName: string; counties: string }>>([])
   const uploadRef = useRef<HTMLInputElement>(null)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [deleteDocId, setDeleteDocId] = useState<string | null>(null)
@@ -242,6 +241,14 @@ export default function Cases() {
   useEffect(() => {
     if (!isNewRoute) setWizardStep("info")
   }, [isNewRoute])
+
+  // Fetch localities when editState changes
+  useEffect(() => {
+    if (!editState) { setLocalities([]); return }
+    billingApi.pfsLocalities(editState).then((res) => {
+      setLocalities(res.localities ?? [])
+    }).catch(() => setLocalities([]))
+  }, [editState])
 
   // ── Poll when status is async-processing ──
   const selectedStatus = cases.find((c) => c.id === selectedId)?.status
@@ -357,16 +364,28 @@ export default function Cases() {
     setEditBilled(c.totalBilled != null ? String(c.totalBilled) : "")
     setEditHousehold(c.householdSize != null ? String(c.householdSize) : "")
     setEditIncome(c.annualIncome != null ? String(c.annualIncome) : "")
+    setEditState(c.state || "")
+    setEditLocality(c.locality || "")
     setEditingInfo(true)
   }
 
-  function saveEditedInfo() {
+  async function saveEditedInfo() {
     if (!selectedCase) return
+    const updates = {
+      state: editState || undefined,
+      locality: editLocality || undefined,
+      totalBilled: editBilled ? parseFloat(editBilled) : undefined,
+      householdSize: editHousehold ? parseInt(editHousehold) : undefined,
+      annualIncome: editIncome ? parseFloat(editIncome) : undefined,
+    }
+    // Update local state immediately
     setCases((prev) =>
       prev.map((c) =>
         c.id === selectedCase.id
           ? {
               ...c,
+              state: editState,
+              locality: editLocality,
               totalBilled: editBilled ? parseFloat(editBilled) : null,
               householdSize: editHousehold ? parseInt(editHousehold) : null,
               annualIncome: editIncome ? parseFloat(editIncome) : null,
@@ -375,6 +394,10 @@ export default function Cases() {
       )
     )
     setEditingInfo(false)
+    // Persist to backend (best-effort)
+    try {
+      await casesApi.update(selectedCase.id, updates)
+    } catch { /* best-effort */ }
   }
 
   function handleInfoSubmit(e: React.FormEvent) {
@@ -390,7 +413,7 @@ export default function Cases() {
     try {
       // 1. Create the case on the backend
       const created = await casesApi.create({
-        state,
+        state: state || undefined,
         providerName: provider || undefined,
         totalBilled: totalBilled ? Number(totalBilled) : undefined,
         householdSize: householdSize ? Number(householdSize) : undefined,
@@ -596,7 +619,7 @@ export default function Cases() {
               {selectedCase.provider || "Unnamed Provider"}
             </h1>
             <p className="text-sm text-gray-500">
-              {selectedCase.state} · Submitted{" "}
+              {selectedCase.state ? `${selectedCase.state} — ${US_STATES[selectedCase.state] ?? selectedCase.state}` : "No state set"} · Submitted{" "}
               {new Date(selectedCase.createdAt).toLocaleDateString()}
             </p>
           </div>
@@ -627,45 +650,73 @@ export default function Cases() {
               </div>
 
               {editingInfo ? (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-3">
                   <div className="border rounded-lg p-3">
-                    <label className="text-xs text-gray-500 mb-1 block">Total Billed</label>
-                    <div className="flex items-center">
-                      <span className="text-sm text-gray-400 mr-1">$</span>
+                    <label className="text-xs text-gray-500 mb-1.5 block">State</label>
+                    <StateSelect value={editState} onChange={(v) => { setEditState(v); setEditLocality("") }} compact />
+                  </div>
+                  {editState && localities.length > 0 && (
+                    <div className="border rounded-lg p-3">
+                      <label className="text-xs text-gray-500 mb-1.5 block">
+                        Locality <span className="text-gray-400 font-normal">({localities.length} areas in {editState})</span>
+                      </label>
+                      <select
+                        value={editLocality}
+                        onChange={(e) => setEditLocality(e.target.value)}
+                        className="w-full text-sm border rounded px-2 py-1.5 bg-white"
+                      >
+                        <option value="">Auto (first match)</option>
+                        {localities.map((l) => (
+                          <option key={l.localityNumber} value={l.localityNumber}>
+                            {l.localityName} (#{l.localityNumber})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        💡 Rates vary by county. Pick your locality for the most accurate Medicare pricing.
+                      </p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="border rounded-lg p-3">
+                      <label className="text-xs text-gray-500 mb-1 block">Total Billed</label>
+                      <div className="flex items-center">
+                        <span className="text-sm text-gray-400 mr-1">$</span>
+                        <input
+                          type="number"
+                          value={editBilled}
+                          onChange={(e) => setEditBilled(e.target.value)}
+                          className="w-full text-sm font-semibold border-b border-gray-300 focus:border-blue-500 outline-none py-0.5 bg-transparent"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                    <div className="border rounded-lg p-3">
+                      <label className="text-xs text-gray-500 mb-1 block">Household Size</label>
                       <input
                         type="number"
-                        value={editBilled}
-                        onChange={(e) => setEditBilled(e.target.value)}
+                        min="1"
+                        value={editHousehold}
+                        onChange={(e) => setEditHousehold(e.target.value)}
                         className="w-full text-sm font-semibold border-b border-gray-300 focus:border-blue-500 outline-none py-0.5 bg-transparent"
-                        placeholder="0"
+                        placeholder="1"
                       />
                     </div>
-                  </div>
-                  <div className="border rounded-lg p-3">
-                    <label className="text-xs text-gray-500 mb-1 block">Household Size</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={editHousehold}
-                      onChange={(e) => setEditHousehold(e.target.value)}
-                      className="w-full text-sm font-semibold border-b border-gray-300 focus:border-blue-500 outline-none py-0.5 bg-transparent"
-                      placeholder="1"
-                    />
-                  </div>
-                  <div className="border rounded-lg p-3">
-                    <label className="text-xs text-gray-500 mb-1 block">Annual Income</label>
-                    <div className="flex items-center">
-                      <span className="text-sm text-gray-400 mr-1">$</span>
-                      <input
-                        type="number"
-                        value={editIncome}
-                        onChange={(e) => setEditIncome(e.target.value)}
-                        className="w-full text-sm font-semibold border-b border-gray-300 focus:border-blue-500 outline-none py-0.5 bg-transparent"
-                        placeholder="0"
-                      />
+                    <div className="border rounded-lg p-3">
+                      <label className="text-xs text-gray-500 mb-1 block">Annual Income</label>
+                      <div className="flex items-center">
+                        <span className="text-sm text-gray-400 mr-1">$</span>
+                        <input
+                          type="number"
+                          value={editIncome}
+                          onChange={(e) => setEditIncome(e.target.value)}
+                          className="w-full text-sm font-semibold border-b border-gray-300 focus:border-blue-500 outline-none py-0.5 bg-transparent"
+                          placeholder="0"
+                        />
+                      </div>
                     </div>
                   </div>
-                  <div className="col-span-3 flex gap-2 mt-1">
+                  <div className="flex gap-2 mt-1">
                     <button
                       onClick={saveEditedInfo}
                       className="bg-blue-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-blue-700 transition-colors"
@@ -681,17 +732,30 @@ export default function Cases() {
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { label: "Total Billed", value: selectedCase.totalBilled != null ? `$${selectedCase.totalBilled.toLocaleString()}` : "—" },
-                    { label: "Household Size", value: selectedCase.householdSize ?? "—" },
-                    { label: "Annual Income", value: selectedCase.annualIncome != null ? `$${selectedCase.annualIncome.toLocaleString()}` : "—" },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="border rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-0.5">{label}</div>
-                      <div className="font-semibold text-sm">{value}</div>
+                <div className="space-y-3">
+                  <div className="border rounded-lg p-3">
+                    <div className="text-xs text-gray-500 mb-0.5">State</div>
+                    <div className="font-semibold text-sm">
+                      {selectedCase.state ? `${selectedCase.state} — ${US_STATES[selectedCase.state] ?? selectedCase.state}` : "—"}
+                      {selectedCase.locality && (
+                        <span className="text-xs text-gray-500 font-normal ml-2">
+                          Locality #{selectedCase.locality}
+                        </span>
+                      )}
                     </div>
-                  ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: "Total Billed", value: selectedCase.totalBilled != null ? `$${selectedCase.totalBilled.toLocaleString()}` : "—" },
+                      { label: "Household Size", value: selectedCase.householdSize ?? "—" },
+                      { label: "Annual Income", value: selectedCase.annualIncome != null ? `$${selectedCase.annualIncome.toLocaleString()}` : "—" },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="border rounded-lg p-3">
+                        <div className="text-xs text-gray-500 mb-0.5">{label}</div>
+                        <div className="font-semibold text-sm">{value}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -700,6 +764,14 @@ export default function Cases() {
             <div className="mb-6">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-semibold text-sm">Documents ({selectedCase.documents.length})</h3>
+                {selectedCase.documents.length > 0 && (
+                  <button
+                    onClick={() => navigate(`/cases/${selectedCase.id}/codes`)}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    Edit Extracted Codes →
+                  </button>
+                )}
               </div>
 
               {selectedCase.documents.length > 0 ? (
@@ -1097,73 +1169,54 @@ export default function Cases() {
                     </div>
                   )}
 
-                  {analysisResult.lineItems.length > 0 ? (
-                    <div className="space-y-3">
-                      {analysisResult.lineItems.map((li) => (
-                        <div key={li.id} className="border rounded-lg p-4">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-mono font-semibold text-sm">
-                              CPT {li.cptCode}
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              {li.units} unit{li.units !== 1 ? "s" : ""}
-                              {li.amountBilled != null && ` · $${li.amountBilled.toLocaleString()}`}
-                            </span>
+                  {/* Flag summary counts — only show categories that have flags */}
+                  {(() => {
+                    const bundlingCount = analysisResult.lineItems.filter(li => li.flags.some(f => f.type === "bundling")).length
+                    const mueCount = analysisResult.lineItems.filter(li => li.flags.some(f => f.type === "mue")).length
+                    const priceCount = analysisResult.lineItems.filter(li => li.flags.some(f => f.type === "price")).length
+                    const totalFlags = bundlingCount + mueCount + priceCount
+
+                    if (totalFlags === 0 && analysisResult.savingsFound <= 0) {
+                      return (
+                        <p className="text-sm text-green-700">
+                          ✅ No billing issues were detected. Your bill looks clean!
+                        </p>
+                      )
+                    }
+
+                    return (
+                      <div className="space-y-2">
+                        {bundlingCount > 0 && (
+                          <div className="flex items-center gap-2 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-red-800">
+                            <span>🔗</span>
+                            <span className="font-medium">NCCI Bundling:</span>
+                            <span>{bundlingCount} code{bundlingCount !== 1 ? "s" : ""} flagged</span>
                           </div>
+                        )}
+                        {mueCount > 0 && (
+                          <div className="flex items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-800">
+                            <span>�</span>
+                            <span className="font-medium">MUE Limits:</span>
+                            <span>{mueCount} code{mueCount !== 1 ? "s" : ""} flagged</span>
+                          </div>
+                        )}
+                        {priceCount > 0 && (
+                          <div className="flex items-center gap-2 text-sm bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-orange-800">
+                            <span>💲</span>
+                            <span className="font-medium">Price Flags:</span>
+                            <span>{priceCount} code{priceCount !== 1 ? "s" : ""} above Medicare rate</span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
 
-                          {li.medicareRate != null && (
-                            <p className="text-xs text-gray-500 mb-2">
-                              Medicare rate: ${li.medicareRate.toFixed(2)}
-                            </p>
-                          )}
-
-                          {li.flags.length > 0 ? (
-                            <div className="space-y-2">
-                              {li.flags.map((flag, i) => (
-                                <div
-                                  key={i}
-                                  className={`rounded-lg p-3 text-sm ${
-                                    flag.type === "bundling"
-                                      ? "bg-red-50 border border-red-200 text-red-800"
-                                      : flag.type === "mue"
-                                      ? "bg-amber-50 border border-amber-200 text-amber-800"
-                                      : "bg-orange-50 border border-orange-200 text-orange-800"
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <span className="font-semibold text-xs uppercase">
-                                      {flag.type === "bundling" ? "🔗 NCCI Bundling" :
-                                       flag.type === "mue" ? "🔢 MUE Limit" :
-                                       "💲 Price Flag"}
-                                    </span>
-                                  </div>
-                                  <p className="text-xs">{flag.detail}</p>
-                                  {flag.type === "mue" && flag.maxUnits != null && (
-                                    <p className="text-xs mt-1 opacity-75">
-                                      Max units allowed: {flag.maxUnits}
-                                      {flag.mai && ` (MAI: ${flag.mai})`}
-                                    </p>
-                                  )}
-                                  {flag.type === "price" && flag.ratio != null && (
-                                    <p className="text-xs mt-1 opacity-75">
-                                      Billed {flag.ratio.toFixed(1)}× the Medicare rate
-                                      {flag.medicareRate != null && ` ($${flag.medicareRate.toFixed(2)})`}
-                                    </p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-green-600">✓ No issues found for this line</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-green-700">
-                      ✅ No billing issues were detected. Your bill looks clean!
-                    </p>
-                  )}
+                  <button
+                    onClick={() => navigate(`/cases/${selectedCase.id}/analysis`)}
+                    className="w-full text-center py-2.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-200 rounded-lg transition-colors"
+                  >
+                    View Full Analysis & Dispute Guide →
+                  </button>
                 </div>
               ) : (
                 <div className="text-sm text-gray-500">
@@ -1230,19 +1283,9 @@ export default function Cases() {
         <form onSubmit={handleInfoSubmit} className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              State <span className="text-red-500">*</span>
+              State <span className="text-gray-400 font-normal">(optional)</span>
             </label>
-            <select
-              required
-              value={state}
-              onChange={(e) => setState(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="">Select state...</option>
-              {US_STATES.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+            <StateSelect value={state} onChange={setState} />
           </div>
 
           <div>
@@ -1350,7 +1393,7 @@ export default function Cases() {
         </div>
 
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-600 space-y-1 mb-6">
-          <div><strong>State:</strong> {state}</div>
+          {state && <div><strong>State:</strong> {state} — {US_STATES[state]}</div>}
           {provider && <div><strong>Provider:</strong> {provider}</div>}
           {totalBilled && <div><strong>Billed:</strong> ${Number(totalBilled).toLocaleString()}</div>}
           <button
@@ -1443,7 +1486,7 @@ export default function Cases() {
             </span>
           </div>
           <p className="text-xs text-gray-500">
-            {c.state} · {new Date(c.createdAt).toLocaleDateString()}
+            {c.state ? `${c.state} — ${US_STATES[c.state] ?? c.state}` : "No state"} · {new Date(c.createdAt).toLocaleDateString()}
           </p>
         </button>
         <div className="flex items-center gap-3 shrink-0">

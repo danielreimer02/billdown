@@ -16,7 +16,8 @@ router = APIRouter()
 
 class CaseCreate(BaseModel):
     case_type: CaseType = CaseType.BILLING
-    state: str
+    state: Optional[str] = None
+    locality: Optional[str] = None
     household_size: Optional[int] = None
     annual_income: Optional[float] = None
     provider_name: Optional[str] = None
@@ -27,6 +28,7 @@ class CaseCreate(BaseModel):
 class CaseUpdate(BaseModel):
     """Partial update — only fields that are set will be applied."""
     state: Optional[str] = None
+    locality: Optional[str] = None
     household_size: Optional[int] = None
     annual_income: Optional[float] = None
     provider_name: Optional[str] = None
@@ -39,7 +41,8 @@ class CaseResponse(BaseModel):
     id: str
     case_type: CaseType
     status: CaseStatus
-    state: str
+    state: Optional[str] = None
+    locality: Optional[str] = None
     provider_name: Optional[str]
     total_billed: Optional[float]
     total_paid: Optional[float]
@@ -73,7 +76,8 @@ def create_case(
         id=str(uuid.uuid4()),
         user_id=None,  # TODO: from auth — nullable until login is wired
         case_type=payload.case_type,
-        state=payload.state,
+        state=payload.state or "",
+        locality=payload.locality,
         household_size=payload.household_size,
         annual_income=payload.annual_income,
         provider_name=payload.provider_name,

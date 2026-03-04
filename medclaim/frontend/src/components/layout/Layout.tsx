@@ -40,9 +40,9 @@ export default function Layout() {
               {navLink("/cases", "My Cases")}
               {navLink("/next", "Protect Yourself for Next Time")}
               {navLink("/physicians", "For Physicians")}
+              {navLink("/companies", "For Companies")}
               <span className="w-px h-5 bg-gray-300" />
-              {navLink("/bill-analysis", "Bill Analysis")}
-              {navLink("/lcd", "LCD Lookup")}
+              {navLink("/tools", "Internal Tools")}
             </nav>
           </div>
         </div>

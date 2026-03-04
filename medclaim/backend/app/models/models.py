@@ -88,6 +88,7 @@ class Case(Base):
 
     # Patient context (no PHI required — just codes)
     state        = Column(String(2))        # TX, CO etc — for charity care rules
+    locality     = Column(String(5))        # GPCI locality number — for accurate pricing
     household_size = Column(Integer)        # for FPL calculation
     annual_income  = Column(Float)          # for charity care eligibility
 

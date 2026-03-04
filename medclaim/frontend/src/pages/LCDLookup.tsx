@@ -130,6 +130,25 @@ export default function LCDLookup() {
   const [pfsLoading, setPfsLoading] = useState(false)
   const [pfsError, setPfsError]     = useState<string | null>(null)
 
+  /* ── CPT description lookup ── */
+  const [cptDescInput, setCptDescInput] = useState("")
+  const [cptDescResult, setCptDescResult] = useState<{
+    cptCode: string; description: string | null; statusCode?: string
+    workRvu?: number; nonfacPeRvu?: number; facilityPeRvu?: number
+    mpRvu?: number; nonfacTotal?: number; facilityTotal?: number
+    message: string
+  } | null>(null)
+  const [cptDescLoading, setCptDescLoading] = useState(false)
+  const [cptDescError, setCptDescError] = useState<string | null>(null)
+
+  /* ── ICD-10 description lookup ── */
+  const [icdDescInput, setIcdDescInput] = useState("")
+  const [icdDescResult, setIcdDescResult] = useState<{
+    icd10Code: string; description: string | null; message: string
+  } | null>(null)
+  const [icdDescLoading, setIcdDescLoading] = useState(false)
+  const [icdDescError, setIcdDescError] = useState<string | null>(null)
+
   /* ── handlers ──────────────────────────────────── */
 
   async function handleLookup() {
@@ -225,6 +244,32 @@ export default function LCDLookup() {
       setPfsError(err instanceof Error ? err.message : "Check failed")
     } finally {
       setPfsLoading(false)
+    }
+  }
+
+  async function handleCptDescLookup() {
+    if (!cptDescInput) return
+    setCptDescLoading(true); setCptDescError(null); setCptDescResult(null)
+    try {
+      const data = await billingApi.cptDescription(cptDescInput)
+      setCptDescResult(data)
+    } catch (err) {
+      setCptDescError(err instanceof Error ? err.message : "Lookup failed")
+    } finally {
+      setCptDescLoading(false)
+    }
+  }
+
+  async function handleIcdDescLookup() {
+    if (!icdDescInput) return
+    setIcdDescLoading(true); setIcdDescError(null); setIcdDescResult(null)
+    try {
+      const data = await billingApi.icd10Description(icdDescInput)
+      setIcdDescResult(data)
+    } catch (err) {
+      setIcdDescError(err instanceof Error ? err.message : "Lookup failed")
+    } finally {
+      setIcdDescLoading(false)
     }
   }
 
@@ -858,6 +903,188 @@ export default function LCDLookup() {
                 <div className="border-t px-5 py-3 text-xs text-gray-500">
                   {rvResult.message}
                 </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════
+          CODE DESCRIPTION LOOKUP — what does this code mean?
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="mt-12 mb-4">
+        <h2 className="text-xl font-bold mb-1">Code Description Lookup</h2>
+        <p className="text-gray-600 text-sm mb-6">
+          Look up what a CPT or ICD-10 code means using official CMS descriptions from the Medicare Fee Schedule
+          and LCD coverage databases.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
+        {/* ── CPT Description ── */}
+        <div>
+          <div className="bg-white border rounded-lg p-5">
+            <h3 className="text-base font-semibold mb-1 flex items-center gap-2">
+              🏷️ CPT / HCPCS Description
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">
+              Enter a CPT or HCPCS code to get the CMS description and RVU values.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">CPT / HCPCS Code</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 27447"
+                  value={cptDescInput}
+                  onChange={e => setCptDescInput(e.target.value.trim())}
+                  onKeyDown={e => e.key === "Enter" && handleCptDescLookup()}
+                  className="w-full border rounded px-3 py-2 font-mono text-sm"
+                  maxLength={5}
+                />
+              </div>
+              <button
+                onClick={handleCptDescLookup}
+                disabled={cptDescLoading || !cptDescInput}
+                className="w-full bg-teal-600 text-white py-2 px-4 rounded text-sm font-medium
+                           hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cptDescLoading ? "Looking up…" : "Look Up CPT"}
+              </button>
+            </div>
+          </div>
+
+          {cptDescError && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-xs mt-3">
+              {cptDescError}
+            </div>
+          )}
+
+          {cptDescResult && (
+            <div className="border rounded-lg bg-white mt-3 overflow-hidden">
+              {cptDescResult.description ? (
+                <div className="p-5 space-y-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono text-sm font-bold text-teal-700">
+                        {cptDescResult.cptCode}
+                      </span>
+                      {cptDescResult.statusCode && (
+                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                          Status: {cptDescResult.statusCode}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-800 leading-relaxed">
+                      {cptDescResult.description}
+                    </p>
+                  </div>
+
+                  {/* RVU breakdown */}
+                  {(cptDescResult.workRvu !== undefined || cptDescResult.nonfacTotal !== undefined) && (
+                    <div className="bg-gray-50 rounded p-3">
+                      <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">RVU Components</h4>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {cptDescResult.workRvu !== undefined && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Work RVU</span>
+                            <span className="font-mono font-semibold">{cptDescResult.workRvu?.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {cptDescResult.nonfacPeRvu !== undefined && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Non-Fac PE RVU</span>
+                            <span className="font-mono font-semibold">{cptDescResult.nonfacPeRvu?.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {cptDescResult.facilityPeRvu !== undefined && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Facility PE RVU</span>
+                            <span className="font-mono font-semibold">{cptDescResult.facilityPeRvu?.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {cptDescResult.mpRvu !== undefined && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">MP RVU</span>
+                            <span className="font-mono font-semibold">{cptDescResult.mpRvu?.toFixed(2)}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t mt-2 pt-2 flex justify-between text-xs font-semibold">
+                        <span className="text-gray-600">Non-Fac Total RVU</span>
+                        <span className="font-mono">{cptDescResult.nonfacTotal?.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-semibold">
+                        <span className="text-gray-600">Facility Total RVU</span>
+                        <span className="font-mono">{cptDescResult.facilityTotal?.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-5 text-sm text-gray-500">{cptDescResult.message}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── ICD-10 Description ── */}
+        <div>
+          <div className="bg-white border rounded-lg p-5">
+            <h3 className="text-base font-semibold mb-1 flex items-center gap-2">
+              🏥 ICD-10 Description
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">
+              Enter an ICD-10 diagnosis code to get the CMS description.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">ICD-10 Code</label>
+                <input
+                  type="text"
+                  placeholder="e.g. M17.11"
+                  value={icdDescInput}
+                  onChange={e => setIcdDescInput(e.target.value.trim().toUpperCase())}
+                  onKeyDown={e => e.key === "Enter" && handleIcdDescLookup()}
+                  className="w-full border rounded px-3 py-2 font-mono text-sm"
+                  maxLength={8}
+                />
+              </div>
+              <button
+                onClick={handleIcdDescLookup}
+                disabled={icdDescLoading || !icdDescInput}
+                className="w-full bg-violet-600 text-white py-2 px-4 rounded text-sm font-medium
+                           hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {icdDescLoading ? "Looking up…" : "Look Up ICD-10"}
+              </button>
+            </div>
+          </div>
+
+          {icdDescError && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-xs mt-3">
+              {icdDescError}
+            </div>
+          )}
+
+          {icdDescResult && (
+            <div className="border rounded-lg bg-white mt-3 overflow-hidden">
+              {icdDescResult.description ? (
+                <div className="p-5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="font-mono text-sm font-bold text-violet-700">
+                      {icdDescResult.icd10Code}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-800 leading-relaxed">
+                    {icdDescResult.description}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-3">
+                    Source: CMS LCD coverage database
+                  </p>
+                </div>
+              ) : (
+                <div className="p-5 text-sm text-gray-500">{icdDescResult.message}</div>
               )}
             </div>
           )}
