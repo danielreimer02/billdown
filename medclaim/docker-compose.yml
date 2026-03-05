@@ -6,7 +6,7 @@ x-data-volumes: &data-volumes
 
 x-backend-env: &backend-env
   - DATABASE_URL=postgresql://medclaim:medclaim@postgres:5432/medclaim
-  - SECRET_KEY=dev-secret-change-in-production
+  - SECRET_KEY=${SECRET_KEY:-dev-secret-change-in-production}
   - ENVIRONMENT=development
   - LCD_DATA_DIR=/data/lcd_analysis/all_data
   - PTP_DATA_DIR=/data/ptp_analysis/extracted
@@ -16,6 +16,8 @@ x-backend-env: &backend-env
   - AWS_SECRET_ACCESS_KEY=test
   - AWS_REGION=us-east-1
   - S3_ENDPOINT_URL=http://localstack:4566
+  - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@medclaim.app}
+  - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
 
 services:
   # ──────────────────────────────────────────────
@@ -84,6 +86,10 @@ services:
       localstack:
         condition: service_started
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    networks:
+      default:
+        aliases:
+          - backend
 
   # ──────────────────────────────────────────────
   # Frontend

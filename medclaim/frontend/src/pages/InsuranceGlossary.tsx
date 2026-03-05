@@ -173,13 +173,98 @@ const TERMS: Term[] = [
     tip: "Always request a Good Faith Estimate in writing before any scheduled procedure. Keep it — it's your legal protection.",
     category: "coverage",
   },
+  {
+    term: "In-Network vs Out-of-Network",
+    aka: "Network, Participating Provider",
+    definition: "In-network providers have a contract with your insurance company and have agreed to accept negotiated (lower) rates. Out-of-network providers have no such agreement and can charge whatever they want — your insurance covers less (or nothing) for their services.",
+    whyItMatters: "Seeing an out-of-network provider can cost 2–5× more than in-network. Even at the same hospital, one doctor might be in-network while another isn't. Always verify before scheduling.",
+    example: "In-network MRI: you pay $200 copay. Same MRI out-of-network: you pay $1,800 (the full charge minus whatever your plan's out-of-network benefit covers).",
+    tip: "Call your insurance company or check their online directory to confirm a provider is in-network BEFORE your appointment. Ask the provider's office too — directories can be outdated.",
+    category: "networks",
+  },
+  // ── Service-Specific Terms ──
+  {
+    term: "Telehealth",
+    aka: "Telemedicine, Virtual Visit",
+    definition: "A medical visit conducted remotely via video call, phone, or chat instead of going to a doctor's office. Most plans now cover telehealth visits, often at a lower copay than in-person visits.",
+    whyItMatters: "Telehealth is usually faster, cheaper, and more convenient. Many plans charge $0–$25 for a virtual visit vs. $30–$50+ for in-person. For non-emergency issues like colds, rashes, prescription refills, or mental health check-ins, telehealth saves time and money.",
+    example: "You wake up with a sore throat. Instead of going to urgent care ($75 copay), you do a telehealth visit ($15 copay). The doctor prescribes antibiotics in 15 minutes.",
+    tip: "Check if your plan includes a telehealth platform (like Teladoc, MDLive, or Amwell). Some plans offer unlimited $0 telehealth — use it before going to urgent care.",
+    category: "services",
+  },
+  {
+    term: "Mental Health Coverage",
+    aka: "Behavioral Health, Mental Health Parity",
+    definition: "Coverage for therapy, counseling, psychiatric services, and substance use treatment. Under the Mental Health Parity and Addiction Equity Act (MHPAEA), insurance plans must cover mental health at the same level as physical health — same copays, same deductible rules, same visit limits.",
+    whyItMatters: "Many people don't realize their plan covers therapy and psychiatric care at the same rate as a regular doctor visit. If your plan charges $30 for a PCP visit, it should charge the same for a therapy session. If a plan requires pre-authorization for mental health but not physical health, that may violate parity law.",
+    example: "Your plan has a $30 PCP copay. Under parity law, your therapy copay should also be $30, not $60 or \"subject to deductible\" when PCP visits aren't.",
+    tip: "If your plan treats mental health differently from physical health (higher copays, more restrictions, fewer covered visits), file a complaint with your state insurance department — this likely violates federal parity law.",
+    category: "services",
+  },
+  // ── Employment & Cost Terms ──
+  {
+    term: "Employer Contribution",
+    aka: "Employer Subsidy, Employer Share",
+    definition: "The portion of your health insurance premium that your employer pays. Most employers cover 50–80% of the premium for employee-only coverage. This is essentially invisible compensation — money your employer pays on your behalf that you never see on your paycheck.",
+    whyItMatters: "The employer contribution is one of the biggest hidden parts of your compensation. If your employer pays $500/month toward your premium and you pay $200/month, the plan actually costs $700/month. When comparing job offers, the employer's health contribution can be worth $6,000–$15,000+ per year.",
+    example: "Plan costs $800/month. Employer pays $600 (75%). You pay $200 from your paycheck, pre-tax. Your W-2 box 12 code DD shows the total employer + employee cost.",
+    tip: "When evaluating a job offer, ask for the employer's premium contribution amount. A job paying $5K less salary but covering 90% of a family plan might be worth more overall.",
+    category: "costs",
+  },
+  {
+    term: "Employee Cost",
+    aka: "Employee Premium Share, Your Share",
+    definition: "The amount deducted from your paycheck each pay period to cover your portion of the health insurance premium. This is usually taken out pre-tax (before income tax is calculated), which effectively gives you a discount.",
+    whyItMatters: "Because employee premiums are usually pre-tax, you save on income tax and FICA. A $200/month premium actually costs you less than $200 in take-home pay. The higher your tax bracket, the bigger the effective discount.",
+    example: "Your bi-weekly premium deduction is $100. In the 22% tax bracket + 7.65% FICA, your real cost is about $70 per paycheck because of the tax savings.",
+    tip: "Check your pay stub for the health insurance deduction line — it's usually under \"pre-tax deductions.\" Compare this to the full plan cost to see how much your employer is contributing.",
+    category: "costs",
+  },
+  // ── Rights & Compliance Terms ──
+  {
+    term: "HIPAA (Health Insurance Portability and Accountability Act)",
+    aka: "HIPAA Privacy Rule, PHI Protection",
+    definition: "A federal law that protects your medical information from being shared without your consent and gives you the right to access your own health records. The Privacy Rule (45 CFR § 164.524) requires healthcare providers to give you copies of your medical records within 30 days of your request.",
+    whyItMatters: "HIPAA is your most powerful tool for getting your own medical records — and you need those records to fight billing errors. If a hospital or doctor refuses to give you your records, they're violating federal law. HIPAA also means providers can't share your health info with employers, insurers (beyond what's needed for claims), or anyone else without your written permission.",
+    example: "You request your medical records and itemized bill from the hospital. Under HIPAA, they must provide them within 30 days. You compare the records to the bill and find charges for services you never received.",
+    tip: "When requesting records, cite \"HIPAA Privacy Rule, 45 CFR § 164.524\" — this shows you know your rights and tends to speed up the process. They can charge a reasonable fee for copies but cannot refuse your request.",
+    category: "rights",
+  },
+  {
+    term: "Mental Health Parity Act",
+    aka: "MHPAEA, Parity Law",
+    definition: "The Mental Health Parity and Addiction Equity Act requires that health insurance plans treat mental health and substance use disorder benefits equally to medical/surgical benefits. This means equal copays, deductibles, visit limits, and prior authorization requirements.",
+    whyItMatters: "Before this law, insurance could charge $60 for a therapy visit but only $20 for a medical visit, or limit you to 20 therapy sessions per year with no limit on medical visits. That's now illegal for most plans. If your plan treats mental health differently from physical health, it may be violating this law.",
+    tip: "If you're denied mental health coverage or face higher costs than for equivalent physical health services, contact your state insurance commissioner or file a complaint at CMS.gov.",
+    category: "rights",
+  },
+  {
+    term: "Appeal & Grievance Rights",
+    aka: "Internal Appeal, External Review",
+    definition: "If your insurance denies a claim or pre-authorization, you have the legal right to appeal. First, file an internal appeal with your insurance company. If they deny again, you can request an independent external review — a third party decides, and the insurer must comply with their decision.",
+    whyItMatters: "About 50% of internal appeals and a significant percentage of external reviews are decided in the patient's favor. Many people give up after the first denial, but appealing is often successful — especially with supporting documentation from your doctor.",
+    example: "Insurance denies your MRI as \"not medically necessary.\" You file an internal appeal with a letter from your doctor. If still denied, you request external review. The independent reviewer overrules the insurer, and the MRI is covered.",
+    tip: "Never accept a denial as final. Ask for the denial in writing, note the reason, and file an appeal within the timeframe specified (usually 180 days for internal appeals). Include a letter of medical necessity from your doctor.",
+    category: "rights",
+  },
+  {
+    term: "501(r) Financial Assistance",
+    aka: "Charity Care, Hospital Financial Assistance",
+    definition: "Under IRS Section 501(r), all nonprofit hospitals (the majority of US hospitals) are required to have a Financial Assistance Policy (FAP) and cannot use extraordinary collection actions (lawsuits, liens, wage garnishment) until they've made reasonable efforts to determine if you qualify for assistance. Discounts often range from 25–100% off the bill based on income.",
+    whyItMatters: "Most people don't know this exists. If your income is under 200–400% of the Federal Poverty Level (varies by hospital), you may qualify for free or deeply discounted care — even retroactively for bills you've already received. Hospitals are legally required to publicize this, but most bury it.",
+    example: "You receive a $15,000 ER bill. Your income is 250% FPL. The hospital's FAP offers a 75% discount for patients under 300% FPL. Your bill drops to $3,750, and you can set up a 0% interest payment plan.",
+    tip: "Google \"[hospital name] financial assistance policy\" to find the application. Apply even if you're not sure you qualify — the worst they can say is no. Many hospitals approve applications retroactively for up to 240 days after the bill.",
+    category: "rights",
+  },
 ]
 
 const CATEGORIES = [
   { key: "costs", label: "💲 Costs & Payments", description: "What you pay and when" },
   { key: "networks", label: "🏥 Plan Types & Networks", description: "How plans organize care" },
   { key: "savings", label: "💰 Tax-Advantaged Accounts", description: "HSA, FSA, and saving on taxes" },
-  { key: "coverage", label: "🛡️ Coverage & Protections", description: "What's covered and your rights" },
+  { key: "services", label: "🩺 Services & Benefits", description: "Telehealth, mental health, and more" },
+  { key: "coverage", label: "🛡️ Coverage & Protections", description: "What's covered and how claims work" },
+  { key: "rights", label: "⚖️ Your Rights", description: "HIPAA, parity, appeals, and financial assistance" },
 ]
 
 export default function InsuranceGlossary() {
@@ -199,7 +284,7 @@ export default function InsuranceGlossary() {
     <div className="max-w-4xl mx-auto p-8">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold">Insurance Terms Glossary</h1>
-        <Link to="/plans" className="text-sm text-blue-600 hover:underline">← Back to Plan Comparison</Link>
+        <Link to="/insurance-plans" className="text-sm text-blue-600 hover:underline">← Back to My Plans</Link>
       </div>
       <p className="text-gray-600 text-sm mb-6">
         Plain-English explanations of health insurance jargon — what each term means,
@@ -243,7 +328,7 @@ export default function InsuranceGlossary() {
       {/* Terms */}
       <div className="space-y-4">
         {filtered.map(t => (
-          <div key={t.term} className="border rounded-xl p-5 hover:border-blue-300 transition-colors">
+          <div key={t.term} id={t.term.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+$/, "")} className="border rounded-xl p-5 hover:border-blue-300 transition-colors scroll-mt-24">
             <div className="flex items-start justify-between mb-2">
               <h2 className="text-lg font-semibold text-gray-900">{t.term}</h2>
               <span className="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded shrink-0 ml-2">

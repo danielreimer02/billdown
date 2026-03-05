@@ -82,7 +82,8 @@ class User(Base):
     is_active      = Column(Boolean, default=True)
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
 
-    cases    = relationship("Case", back_populates="user")
+    cases            = relationship("Case", back_populates="user")
+    insurance_plans  = relationship("InsurancePlan", back_populates="user")
 
 
 # ─────────────────────────────────────────
@@ -94,8 +95,9 @@ class Case(Base):
     __tablename__ = "cases"
 
     id           = Column(String, primary_key=True, default=generate_uuid)
-    user_id      = Column(String, ForeignKey("users.id"), nullable=True)
-    case_type    = Column(Enum(CaseType, values_callable=lambda e: [x.value for x in e]), default=CaseType.BILLING, nullable=False)
+    user_id      = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id     = Column(String, nullable=True, index=True)  # guest browser UUID
+    case_type    = Column(Enum(CaseType, values_callable=lambda e: [x.value for x in e]), default=CaseType.BILLING, nullable=False, index=True)
     status       = Column(Enum(CaseStatus, values_callable=lambda e: [x.value for x in e]), default=CaseStatus.UPLOADED)
 
     # Patient context (no PHI required — just codes)
@@ -220,3 +222,121 @@ class SiteConfig(Base):
     label       = Column(String(200))                 # human-readable name for UI
     description = Column(Text)                        # what this config controls
     updated_at  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ─────────────────────────────────────────
+# INSURANCE PLAN
+# User-owned insurance plan for comparison
+# ─────────────────────────────────────────
+
+class InsurancePlan(Base):
+    __tablename__ = "insurance_plans"
+
+    id                    = Column(String, primary_key=True, default=generate_uuid)
+    user_id               = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id              = Column(String, nullable=True, index=True)
+
+    # Plan identification
+    name                  = Column(String, nullable=False)           # "Blue Cross Gold PPO"
+    carrier               = Column(String)                           # "Blue Cross Blue Shield"
+    plan_type             = Column(String)                           # hmo, ppo, epo, pos, hdhp
+    metal_tier            = Column(String)                           # bronze, silver, gold, platinum
+    member_id             = Column(String)                           # member / subscriber ID
+    group_number          = Column(String)                           # group number
+
+    # Costs
+    monthly_premium       = Column(Float, default=0.0)
+    annual_deductible     = Column(Float, default=0.0)
+    family_deductible     = Column(Float)
+    oop_max               = Column(Float, default=0.0)
+    family_oop_max        = Column(Float)
+
+    # Copays & coinsurance
+    copay_primary         = Column(Float, default=0.0)               # PCP visit
+    copay_specialist      = Column(Float, default=0.0)
+    copay_urgent_care     = Column(Float, default=0.0)
+    copay_er              = Column(Float, default=0.0)
+    coinsurance           = Column(Float, default=20.0)              # % you pay after deductible
+
+    # Rx
+    rx_generic            = Column(Float, default=0.0)
+    rx_preferred          = Column(Float, default=0.0)
+    rx_specialty          = Column(Float)
+
+    # Extras
+    hsa_eligible          = Column(Boolean, default=False)
+    telehealth_copay      = Column(Float)
+    mental_health_copay   = Column(Float)
+
+    # Employer (for company plans)
+    employer_contribution = Column(Float)                            # $ employer pays / mo
+    employee_cost         = Column(Float)                            # $ employee pays / mo
+
+    notes                 = Column(Text)
+    is_active             = Column(Boolean, default=True)            # soft-archive
+    created_at            = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at            = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="insurance_plans")
+
+
+# ─────────────────────────────────────────
+# AUDIT LOG
+# HIPAA-required audit trail for all PHI access
+# ─────────────────────────────────────────
+
+class AuditAction(str, enum.Enum):
+    VIEW       = "view"
+    CREATE     = "create"
+    UPDATE     = "update"
+    DELETE     = "delete"
+    EXPORT     = "export"
+    LOGIN      = "login"
+    LOGOUT     = "logout"
+    LOGIN_FAIL = "login_fail"
+    UPLOAD     = "upload"
+    DOWNLOAD   = "download"
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id            = Column(String, primary_key=True, default=generate_uuid)
+
+    # Who
+    user_id       = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    user_email    = Column(String)                    # denormalized for fast reads
+    guest_id      = Column(String, nullable=True)     # for guest actions
+
+    # What
+    action        = Column(Enum(AuditAction, values_callable=lambda e: [x.value for x in e]),
+                           nullable=False, index=True)
+    resource_type = Column(String(50), nullable=False, index=True)  # "case", "document", "insurance_plan", "user", etc.
+    resource_id   = Column(String, nullable=True, index=True)
+
+    # Context
+    ip_address    = Column(String(45))                # IPv4 or IPv6
+    user_agent    = Column(String(500))
+    endpoint      = Column(String(200))               # e.g. "GET /api/cases/abc123"
+    metadata_json = Column(JSON, nullable=True)       # extra context: fields changed, search terms, etc.
+
+    # When
+    created_at    = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ─────────────────────────────────────────
+# PAGE VIEWS — anonymous site-level analytics
+# ─────────────────────────────────────────
+
+class PageView(Base):
+    __tablename__ = "page_views"
+
+    id          = Column(String, primary_key=True, default=generate_uuid)
+    path        = Column(String(500), nullable=False, index=True)    # e.g. "/insurance-guide"
+    referrer    = Column(String(1000), nullable=True)                # document.referrer / Referer header
+    user_agent  = Column(String(500), nullable=True)
+    ip_address  = Column(String(45), nullable=True)
+    session_id  = Column(String(100), nullable=True, index=True)    # anonymous session identifier
+    user_id     = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    country     = Column(String(100), nullable=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now(), index=True)

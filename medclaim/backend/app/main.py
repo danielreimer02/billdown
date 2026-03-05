@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(message)s")
 
 from sqlalchemy import text
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -17,6 +17,8 @@ from app.services.billing_etl import load_all_billing_data
 import app.models.models  # noqa: F401
 import app.models.lcd_models  # noqa: F401
 import app.models.billing_models  # noqa: F401
+
+from app.core.audit import audit_middleware
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,27 @@ def _sync_pg_enums():
                     stmt = f"ALTER TYPE {pg_name} ADD VALUE IF NOT EXISTS '{member.value}'"
                     conn.execute(text(stmt))
                     logger.info("Added '%s' to PG enum %s", member.value, pg_name)
+
+
+def _rename_columns():
+    """Rename columns that were renamed in models (idempotent)."""
+    from sqlalchemy import inspect as sa_inspect
+    inspector = sa_inspect(engine)
+
+    renames = [
+        # (table, old_name, new_name)
+        ("cases", "session_id", "guest_id"),
+    ]
+
+    with engine.begin() as conn:
+        for table_name, old_name, new_name in renames:
+            if not inspector.has_table(table_name):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table_name)}
+            if old_name in existing and new_name not in existing:
+                stmt = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_name}" TO "{new_name}"'
+                logger.info("Renaming column: %s.%s → %s", table_name, old_name, new_name)
+                conn.execute(text(stmt))
 
 
 def _sync_missing_columns():
@@ -116,10 +139,86 @@ def _sync_missing_columns():
                     else:
                         nullable = ""  # fall back to nullable to avoid crash
 
-                stmt = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}{default_clause}{nullable}'
+                stmt = f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}{default_clause}{nullable}'
                 logger.info("Adding missing column: %s.%s (%s)", table.name, col.name, col_type)
                 conn.execute(text(stmt))
 
+
+
+def _seed_admin():
+    """Create the admin user if it doesn't already exist.
+    If the admin already exists, ensure role is admin and
+    sync the password if the env var changed.
+    """
+    from sqlalchemy import select
+    from app.db.session import SessionLocal
+    from app.models.models import User, UserRole
+    from app.core.security import hash_password, verify_password
+
+    db = SessionLocal()
+    try:
+        existing = db.execute(
+            select(User).where(User.email == settings.ADMIN_EMAIL)
+        ).scalar_one_or_none()
+        if existing:
+            changed = False
+            # Ensure role is admin
+            if existing.role != UserRole.ADMIN:
+                existing.role = UserRole.ADMIN
+                changed = True
+                logger.info("Updated %s role to admin", settings.ADMIN_EMAIL)
+            # Sync password if the env var changed
+            if not verify_password(settings.ADMIN_PASSWORD, existing.hashed_password):
+                existing.hashed_password = hash_password(settings.ADMIN_PASSWORD)
+                changed = True
+                logger.info("Updated admin password from env")
+            if changed:
+                db.commit()
+            else:
+                logger.info("Admin user %s already exists", settings.ADMIN_EMAIL)
+            return
+
+        admin = User(
+            email=settings.ADMIN_EMAIL,
+            hashed_password=hash_password(settings.ADMIN_PASSWORD),
+            full_name="Admin",
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        db.add(admin)
+        db.commit()
+        logger.info("Created admin user: %s", settings.ADMIN_EMAIL)
+    finally:
+        db.close()
+
+
+def _recover_stuck_cases():
+    """Reset cases stuck in transient processing states from a prior crash/restart.
+
+    If the server was killed while OCR or analysis was running, those cases
+    will be stuck in 'ocr_processing' or 'analyzing' forever.  Move them to
+    'needs_review' so the user can re-trigger the pipeline.
+    """
+    from app.models.models import CaseStatus
+
+    stuck_statuses = [CaseStatus.OCR_PROCESSING, CaseStatus.ANALYZING]
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "UPDATE cases SET status = :target "
+                "WHERE status IN :stuck "
+                "RETURNING id"
+            ),
+            {"target": CaseStatus.NEEDS_REVIEW.value, "stuck": tuple(s.value for s in stuck_statuses)},
+        )
+        rows = result.fetchall()
+        if rows:
+            logger.info(
+                "Recovered %d stuck case(s) (%s) → needs_review",
+                len(rows),
+                ", ".join(r[0][:8] for r in rows),
+            )
 
 
 @asynccontextmanager
@@ -131,6 +230,9 @@ async def lifespan(app: FastAPI):
 
     # Ensure PG enum types have all values from Python enums
     _sync_pg_enums()
+
+    # Rename any columns that were renamed in models
+    _rename_columns()
 
     # Add any columns that exist in models but not yet in Postgres
     _sync_missing_columns()
@@ -157,6 +259,12 @@ async def lifespan(app: FastAPI):
     from app.services.config_seed import seed_site_config
     seed_site_config()
 
+    # Seed admin user if it doesn't exist
+    _seed_admin()
+
+    # Recover any cases stuck in transient processing states from a prior crash/restart
+    _recover_stuck_cases()
+
     yield
     # ── Shutdown ─────────────────────────
     logger.info("Shutting down...")
@@ -177,6 +285,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── HIPAA audit logging middleware ──
+from starlette.middleware.base import BaseHTTPMiddleware
+app.add_middleware(BaseHTTPMiddleware, dispatch=audit_middleware)
+
+
+# ── Security headers middleware ──
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Add security headers to every response (HIPAA infrastructure requirement)."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # HSTS — only enable when behind HTTPS (nginx/Cloudflare handles TLS)
+    if request.headers.get("x-forwarded-proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 app.include_router(auth.router,      prefix="/api/auth",      tags=["auth"])
 app.include_router(cases.router,     prefix="/api/cases",     tags=["cases"])
 app.include_router(documents.router, prefix="/api/cases",     tags=["documents"])
@@ -188,6 +316,15 @@ app.include_router(config.router,    prefix="/api/config",    tags=["config"])
 
 from app.api.routes import analytics
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+
+from app.api.routes import site_analytics
+app.include_router(site_analytics.router, prefix="/api/site-analytics", tags=["site-analytics"])
+
+from app.api.routes import admin
+app.include_router(admin.router,     prefix="/api/admin",     tags=["admin"])
+
+from app.api.routes import insurance_plans
+app.include_router(insurance_plans.router, prefix="/api/insurance-plans", tags=["insurance-plans"])
 
 
 @app.get("/health")

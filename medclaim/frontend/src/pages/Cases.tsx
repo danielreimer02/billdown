@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { useParams, useNavigate, useLocation } from "react-router-dom"
+import { useParams, useNavigate, useLocation, Link } from "react-router-dom"
 import { charityCareData } from "@/data/charityCare"
 import { casesApi, documentsApi, billingApi, BASE_URL } from "@/lib/api"
 import StateSelect, { US_STATES } from "@/components/StateSelect"
 import type { CaseType, DocumentType, AnalysisResponse, ExtractedCodesResponse } from "@/types"
+import { useAuth } from "@/store/auth"
 
 // FPL calculation (2024 guidelines)
 const FPL_BASE = 15060
@@ -177,9 +178,55 @@ export default function Cases() {
   const { id: urlCaseId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
+  const { user, guestRole, loading: authLoading } = useAuth()
+  const isGuest = !user && !!guestRole
+
+  // ── Guest-aware routing ──
+  // When Cases is embedded inside GuestCases at /guest/individual,
+  // keep navigations within that prefix so guests don't lose the wrapper.
+  const isGuestRoute = location.pathname.startsWith("/guest/individual")
+  const basePath = isGuestRoute ? "/guest/individual" : "/cases"
+  function casePath(suffix?: string) {
+    return suffix ? `${basePath}${suffix}` : basePath
+  }
+
+  // ── Gate: require login or guest mode ──
+  if (!authLoading && !user && !guestRole) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-24 text-center">
+        <span className="text-4xl mb-4 block">🔒</span>
+        <h1 className="text-xl font-bold mb-2">Sign in to view your cases</h1>
+        <p className="text-sm text-gray-500 mb-6">
+          You need to be logged in or browsing as a guest to access cases.
+        </p>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={() => navigate("/login")}
+            className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
+          >
+            Sign In
+          </button>
+          <button
+            onClick={() => navigate("/guest")}
+            className="border border-gray-300 text-gray-700 px-5 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 transition-colors"
+          >
+            Continue as Guest
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-gray-500 text-sm">Loading…</p>
+      </div>
+    )
+  }
 
   // Derive high-level view from URL; wizard sub-steps stay in local state
-  const isNewRoute = location.pathname === "/cases/new"
+  const isNewRoute = location.pathname.endsWith("/new")
   const [wizardStep, setWizardStep] = useState<"info" | "upload">("info")
 
   const view: View = urlCaseId
@@ -442,7 +489,7 @@ export default function Cases() {
       setShowInsuranceLetter(false)
       setExtractedCodes(null)
       setAnalysisResult(null)
-      navigate(`/cases/${localCase.id}`)
+      navigate(casePath(`/${localCase.id}`))
     } catch (err: any) {
       setError(errMsg(err, "Failed to create case"))
     } finally {
@@ -543,7 +590,7 @@ export default function Cases() {
     } catch { /* best-effort */ }
     setCases((prev) => prev.filter((c) => c.id !== id))
     if (selectedId === id) {
-      navigate("/cases")
+      navigate(casePath())
     }
   }
 
@@ -601,7 +648,7 @@ export default function Cases() {
       <>
       <div className="max-w-5xl mx-auto p-8">
         <button
-          onClick={() => { navigate("/cases"); setShowHospitalLetter(false); setShowInsuranceLetter(false); setExtractedCodes(null); setAnalysisResult(null) }}
+          onClick={() => { navigate(casePath()); setShowHospitalLetter(false); setShowInsuranceLetter(false); setExtractedCodes(null); setAnalysisResult(null) }}
           className="text-sm text-gray-500 hover:text-gray-700 mb-6 flex items-center gap-1"
         >
           ← Back to cases
@@ -1221,10 +1268,16 @@ export default function Cases() {
               ) : (
                 <div className="text-sm text-gray-500">
                   {["uploaded", "ocr_processing"].includes(selectedCase.status) && (
-                    <div className="flex items-center gap-2">
-                      <span className="animate-pulse">⏳</span>
-                      <p>
-                        Your bill is being processed. While you wait, use the letters
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="animate-pulse">⏳</span>
+                        <p>
+                          Your bill is being processed. This can take <strong>2–5 minutes</strong> for
+                          scanned documents or images while our OCR engine reads the text.
+                        </p>
+                      </div>
+                      <p className="text-xs text-gray-400">
+                        This page refreshes automatically. While you wait, use the letters below
                         to request your records from the hospital and insurance.
                       </p>
                     </div>
@@ -1255,7 +1308,7 @@ export default function Cases() {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <button
-          onClick={() => navigate("/cases")}
+          onClick={() => navigate(casePath())}
           className="text-sm text-gray-500 hover:text-gray-700 mb-6 flex items-center gap-1"
         >
           ← Back to cases
@@ -1474,7 +1527,7 @@ export default function Cases() {
         className="w-full text-left border rounded-lg p-4 hover:bg-gray-50 transition flex items-center justify-between group"
       >
         <button
-          onClick={() => { setExtractedCodes(null); setAnalysisResult(null); navigate(`/cases/${c.id}`) }}
+          onClick={() => { setExtractedCodes(null); setAnalysisResult(null); navigate(casePath(`/${c.id}`)) }}
           className="flex-1 min-w-0 text-left"
         >
           <div className="flex items-center gap-2 mb-0.5">
@@ -1518,8 +1571,14 @@ export default function Cases() {
 
   return (
     <div className="max-w-6xl mx-auto p-8">
-      <div className="mb-8">
+      <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-bold">My Cases</h1>
+        <Link
+          to="/insurance-plans"
+          className="text-sm text-blue-600 hover:underline font-medium"
+        >
+          My Insurance Plans →
+        </Link>
       </div>
 
       {loadingList ? (
@@ -1535,13 +1594,13 @@ export default function Cases() {
           </p>
           <div className="flex items-center justify-center gap-3">
             <button
-              onClick={() => { resetForm(); navigate("/cases/new") }}
+              onClick={() => { resetForm(); navigate(casePath("/new")) }}
               className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors"
             >
               Review Your First Bill
             </button>
             <button
-              onClick={() => { resetForm(); navigate("/cases/new?type=prior_auth") }}
+              onClick={() => { resetForm(); navigate(casePath("/new?type=prior_auth")) }}
               className="bg-violet-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors"
             >
               Review a Prior Auth
@@ -1560,7 +1619,7 @@ export default function Cases() {
                 </span>
               </h2>
               <button
-                onClick={() => { resetForm(); navigate("/cases/new") }}
+                onClick={() => { resetForm(); navigate(casePath("/new")) }}
                 className="text-sm font-medium text-blue-600 hover:text-blue-800"
               >
                 + Bill Review
@@ -1587,7 +1646,7 @@ export default function Cases() {
                 </span>
               </h2>
               <button
-                onClick={() => { resetForm(); navigate("/cases/new") }}
+                onClick={() => { resetForm(); navigate(casePath("/new")) }}
                 className="text-sm font-medium text-blue-600 hover:text-blue-800"
               >
                 + Prior Auth

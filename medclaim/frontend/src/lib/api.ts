@@ -20,12 +20,40 @@ import type {
   AnalysisResponse,
 } from "@/types"
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000"
+const BASE_URL = import.meta.env.VITE_API_URL ?? ""
 export { BASE_URL }
+
+// ─────────────────────────────────────────
+// GUEST ID  — localStorage, sent as X-Guest-ID header
+// ─────────────────────────────────────────
+
+const GUEST_ID_KEY = "mc_guest_id"
+
+export function getGuestId(): string | null {
+  return localStorage.getItem(GUEST_ID_KEY)
+}
+
+export function ensureGuestId(): string {
+  let id = localStorage.getItem(GUEST_ID_KEY)
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem(GUEST_ID_KEY, id)
+  }
+  return id
+}
+
+export function clearGuestId() {
+  localStorage.removeItem(GUEST_ID_KEY)
+}
 
 // ─────────────────────────────────────────
 // HTTP HELPER
 // ─────────────────────────────────────────
+
+function guestHeaders(): Record<string, string> {
+  const gid = getGuestId()
+  return gid ? { "X-Guest-ID": gid } : {}
+}
 
 async function request<T>(
   path: string,
@@ -37,7 +65,7 @@ async function request<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : guestHeaders()),
       ...options.headers,
     },
   })
@@ -61,8 +89,12 @@ async function request<T>(
 // ─────────────────────────────────────────
 
 export const casesApi = {
-  list: (type?: CaseType) =>
-    request<Case[]>(`/api/cases/${type ? `?type=${type}` : ""}`),
+  list: (type?: CaseType) => {
+    const params = new URLSearchParams()
+    if (type) params.set("type", type)
+    const qs = params.toString()
+    return request<Case[]>(`/api/cases/${qs ? `?${qs}` : ""}`)
+  },
 
   get: (id: string) =>
     request<Case>(`/api/cases/${id}`),
@@ -141,7 +173,9 @@ export const documentsApi = {
       `${BASE_URL}/api/cases/${caseId}/documents/upload?document_type=${documentType}`,
       {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : guestHeaders()),
+        },
         body: formData,
       }
     )
@@ -601,4 +635,107 @@ export const configApi = {
     request<{ status: string; key: string }>(`/api/config/${encodeURIComponent(key)}`, {
       method: "DELETE",
     }),
+}
+
+
+// ─────────────────────────────────────────
+// INSURANCE PLANS — user-owned
+// ─────────────────────────────────────────
+
+export interface InsurancePlanPayload {
+  name: string
+  carrier?: string | null
+  plan_type?: string | null
+  metal_tier?: string | null
+  member_id?: string | null
+  group_number?: string | null
+  monthly_premium?: number
+  annual_deductible?: number
+  family_deductible?: number | null
+  oop_max?: number
+  family_oop_max?: number | null
+  copay_primary?: number
+  copay_specialist?: number
+  copay_urgent_care?: number
+  copay_er?: number
+  coinsurance?: number
+  rx_generic?: number
+  rx_preferred?: number
+  rx_specialty?: number | null
+  hsa_eligible?: boolean
+  telehealth_copay?: number | null
+  mental_health_copay?: number | null
+  employer_contribution?: number | null
+  employee_cost?: number | null
+  notes?: string | null
+}
+
+export interface InsurancePlanResponse extends InsurancePlanPayload {
+  id: string
+  created_at: string | null
+}
+
+export const insurancePlansApi = {
+  list: () =>
+    request<InsurancePlanResponse[]>("/api/insurance-plans/"),
+
+  create: (payload: InsurancePlanPayload) =>
+    request<InsurancePlanResponse>("/api/insurance-plans/", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  get: (id: string) =>
+    request<InsurancePlanResponse>(`/api/insurance-plans/${id}`),
+
+  update: (id: string, payload: Partial<InsurancePlanPayload>) =>
+    request<InsurancePlanResponse>(`/api/insurance-plans/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  delete: (id: string) =>
+    request<void>(`/api/insurance-plans/${id}`, { method: "DELETE" }),
+
+  compare: (ids?: string[]) => {
+    const qs = ids?.length ? `?ids=${ids.join(",")}` : ""
+    return request<InsurancePlanResponse[]>(`/api/insurance-plans/compare${qs}`)
+  },
+}
+
+
+// ─────────────────────────────────────────
+// ADMIN API — requires admin JWT
+// ─────────────────────────────────────────
+
+export const adminApi = {
+  listCases: (params?: { type?: CaseType; status?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.type) qs.set("type", params.type)
+    if (params?.status) qs.set("status", params.status)
+    const q = qs.toString()
+    return request<Case[]>(`/api/admin/cases${q ? `?${q}` : ""}`)
+  },
+
+  getCase: (id: string) =>
+    request<Case>(`/api/admin/cases/${id}`),
+
+  listUsers: (role?: string) => {
+    const qs = role ? `?role=${encodeURIComponent(role)}` : ""
+    return request<Array<{
+      id: string; email: string; full_name: string | null; role: string
+      company_name: string | null; npi: string | null
+      is_active: boolean; created_at: string | null
+    }>>(`/api/admin/users${qs}`)
+  },
+
+  getUser: (id: string) =>
+    request<{
+      id: string; email: string; full_name: string | null; role: string
+      company_name: string | null; npi: string | null
+      is_active: boolean; created_at: string | null
+    }>(`/api/admin/users/${id}`),
+
+  userCases: (userId: string) =>
+    request<Case[]>(`/api/admin/users/${userId}/cases`),
 }

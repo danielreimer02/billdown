@@ -459,7 +459,7 @@ export default function ForIndividuals() {
             { icon: "📋", title: "LCD Coverage Lookup", desc: "Search Local Coverage Determinations to verify your diagnosis supports the procedure — the same data insurance companies use to approve or deny claims.", to: "/lcd" },
             { icon: "🔍", title: "Prior Treatment Requirements", desc: "341 LCDs require documentation of prior conservative treatment before surgery. We flag when your LCD requires this so you can prepare documentation.", to: "/lcd-explorer" },
             { icon: "📖", title: "Insurance Glossary", desc: "Not sure what 'coinsurance' or 'EOB' means? Our plain-English glossary explains every insurance term, why it matters, and how it affects your costs.", to: "/plans/glossary" },
-            { icon: "📊", title: "Compare Health Plans", desc: "Add your plan options and compare them side-by-side. Our cost estimator shows which plan actually costs less based on your expected healthcare usage.", to: "/plans" },
+            { icon: "📊", title: "Compare Health Plans", desc: "Add your plan options and compare them side-by-side. Our cost estimator shows which plan actually costs less based on your expected healthcare usage.", to: "/insurance-plans" },
             { icon: "🛡️", title: "Know Your Rights", desc: "Good Faith Estimates, the No Surprises Act, HIPAA record requests, 501(r) financial assistance — we tell you exactly what laws protect you and how to use them.", to: "/start" },
           ].map(item => (
             <Link key={item.title} to={item.to} className="flex gap-3 p-4 border rounded-xl hover:border-blue-300 hover:shadow-sm transition-all group">
@@ -488,7 +488,7 @@ export default function ForIndividuals() {
             Start Your Free Case →
           </Link>
           <Link
-            to="/plans"
+            to="/insurance-plans"
             className="inline-block border-2 border-blue-600 text-blue-600 px-8 py-3 rounded-lg font-medium hover:bg-blue-50 transition-colors"
           >
             📊 Compare Insurance Plans

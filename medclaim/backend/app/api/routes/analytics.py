@@ -1,15 +1,19 @@
 """
 Analytics API — lightweight summary stats for the dashboard.
+Admin-only: requires authenticated user with role=admin.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from app.db.session import engine
+from app.core.security import require_role
 
 router = APIRouter()
 
+_admin = Depends(require_role("admin"))
 
-@router.get("/summary")
+
+@router.get("/summary", dependencies=[_admin])
 async def analytics_summary():
     """Return aggregate stats for the analytics dashboard."""
     with engine.connect() as conn:

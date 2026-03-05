@@ -10,6 +10,13 @@ import { Link } from "react-router-dom"
 
 const tools = [
   {
+    to: "/admin/cases",
+    icon: "📝",
+    name: "Review & Edit Cases",
+    description:
+      "View every case across all users and guests. See who owns each case, inspect details, and manage case data.",
+  },
+  {
     to: "/bill-analysis",
     icon: "🔍",
     name: "Bill Analysis",

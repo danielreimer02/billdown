@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Physician Fee Schedule (price check)
     PFS_DATA_DIR: str = "/data/pfs_analysis"
 
+    # Admin seed account (created on first startup)
+    ADMIN_EMAIL: str = "admin@medclaim.app"
+    ADMIN_PASSWORD: str = "admin"   # override in .env for production
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",

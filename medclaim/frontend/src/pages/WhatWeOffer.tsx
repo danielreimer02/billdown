@@ -114,7 +114,7 @@ const sections = [
       },
       {
         icon: "📈",
-        title: "Analytics Dashboard",
+        title: "Data Analytics Dashboard",
         desc: "Track total savings found, common billing errors, top overcharging providers, and claim denial rates across your organization.",
       },
       {

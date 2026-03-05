@@ -4,18 +4,23 @@ Site Config API — CRUD for admin-editable configuration.
 Manages key-value config entries stored in the site_config table.
 Used by the Site Maintenance UI to edit letter templates, charity care
 state data, and other reference data without redeploying.
+
+Admin-only: all endpoints require role=admin.
 """
 
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.db.session import engine
+from app.core.security import require_role
 
 router = APIRouter()
+
+_admin = Depends(require_role("admin"))
 
 
 # ── Pydantic schemas ──
@@ -35,7 +40,7 @@ class ConfigUpdate(BaseModel):
 
 # ── Endpoints ──
 
-@router.get("")
+@router.get("", dependencies=[_admin])
 async def list_configs(
     category: Optional[str] = Query(None, description="Filter by category"),
 ):
@@ -65,7 +70,7 @@ async def list_configs(
         ]
 
 
-@router.get("/categories")
+@router.get("/categories", dependencies=[_admin])
 async def list_categories():
     """List all distinct categories."""
     with engine.connect() as conn:
@@ -75,7 +80,7 @@ async def list_categories():
         return [{"category": r.category, "count": r.cnt} for r in rows]
 
 
-@router.get("/{key}")
+@router.get("/{key}", dependencies=[_admin])
 async def get_config(key: str):
     """Get a single config entry by key."""
     with engine.connect() as conn:
@@ -98,7 +103,7 @@ async def get_config(key: str):
         }
 
 
-@router.post("")
+@router.post("", dependencies=[_admin])
 async def create_config(entry: ConfigEntry):
     """Create a new config entry."""
     import json
@@ -131,7 +136,7 @@ async def create_config(entry: ConfigEntry):
     return {"status": "created", "key": entry.key}
 
 
-@router.put("/{key}")
+@router.put("/{key}", dependencies=[_admin])
 async def update_config(key: str, update: ConfigUpdate):
     """Update an existing config entry's value."""
     import json
@@ -163,7 +168,7 @@ async def update_config(key: str, update: ConfigUpdate):
     return {"status": "updated", "key": key}
 
 
-@router.delete("/{key}")
+@router.delete("/{key}", dependencies=[_admin])
 async def delete_config(key: str):
     """Delete a config entry."""
     with engine.begin() as conn:

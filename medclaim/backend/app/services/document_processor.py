@@ -144,23 +144,47 @@ def _try_native_pdf(file_bytes: bytes) -> str:
 # DOCLING — scanned PDFs + images
 # ─────────────────────────────────────────
 
+# Maximum seconds to wait for Docling OCR before giving up.
+# On CPU, one page of a scanned PDF / image can take 3-10 minutes
+# through the full pipeline (EasyOCR + layout + table structure).
+_DOCLING_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
 def _extract_with_docling(file_bytes: bytes, filename: str) -> str:
     """
     Docling handles scanned PDFs, JPGs, PNGs, fax images, phone photos.
     Converts to Markdown — preserves table structure well.
 
     Docling needs a file path (not raw bytes), so we write to a temp file.
+    Wrapped with a timeout so slow CPU processing doesn't hang forever.
     """
+    import concurrent.futures
+
     converter = _get_converter()
     suffix = Path(filename).suffix.lower()
+
+    def _do_convert(path: str) -> str:
+        result = converter.convert(path)
+        return result.document.export_to_markdown()
 
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
             tmp.write(file_bytes)
             tmp.flush()
 
-            result = converter.convert(tmp.name)
-            return result.document.export_to_markdown()
+            logger.info(f"Starting Docling OCR for {filename} (timeout={_DOCLING_TIMEOUT_SECONDS}s)…")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_do_convert, tmp.name)
+                try:
+                    text = future.result(timeout=_DOCLING_TIMEOUT_SECONDS)
+                    logger.info(f"Docling OCR completed for {filename} ({len(text)} chars)")
+                    return text
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        f"Docling OCR timed out after {_DOCLING_TIMEOUT_SECONDS}s for {filename}. "
+                        "Returning empty text — case will move to needs_review with no extracted codes."
+                    )
+                    return ""
 
     except Exception as e:
         logger.error(f"Docling extraction failed for {filename}: {e}")

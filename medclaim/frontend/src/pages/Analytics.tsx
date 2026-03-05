@@ -1,15 +1,21 @@
 import { useState, useEffect } from "react"
-import { casesApi, configApi } from "@/lib/api"
+import { adminApi } from "@/lib/api"
 
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000"
-async function request<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`)
+const BASE_URL = import.meta.env.VITE_API_URL ?? ""
+
+async function authedRequest<T>(path: string): Promise<T> {
+  const token = localStorage.getItem("mc_token")
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
   if (!res.ok) throw new Error(`${res.status}`)
   return res.json()
 }
 
 /**
- * Analytics — /analytics
+ * Analytics — /admin/data-analytics
  *
  * Dashboard showing platform usage, case stats, database health,
  * and reference data coverage at a glance.
@@ -94,7 +100,7 @@ export default function Analytics() {
     try {
       // Fetch stats from a lightweight backend endpoint
       const [statsRes, casesRes] = await Promise.all([
-        request<{
+        authedRequest<{
           cases: number
           line_items: number
           documents: number
@@ -109,7 +115,7 @@ export default function Analytics() {
           flag_summary: { bundling: number; mue: number; price: number; total: number }
           top_cpts: Array<{ code: string; description: string; count: number }>
         }>("/api/analytics/summary"),
-        casesApi.list(),
+        adminApi.listCases(),
       ])
 
       setDb({
@@ -159,7 +165,7 @@ export default function Analytics() {
 
   return (
     <div className="max-w-6xl mx-auto p-8">
-      <h1 className="text-2xl font-bold mb-1">Analytics Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-1">Data Analytics</h1>
       <p className="text-gray-600 text-sm mb-8">Platform usage, case pipeline, and reference data health.</p>
 
       {/* ── Row 1: Key metrics ── */}

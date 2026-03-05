@@ -13,8 +13,9 @@ import {
   useCallback,
   type ReactNode,
 } from "react"
+import { getGuestId, clearGuestId, ensureGuestId } from "@/lib/api"
 
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL ?? ""
 
 // ── Types ──
 
@@ -36,6 +37,7 @@ interface AuthState {
   token: string | null
   guestRole: UserRole | null
   loading: boolean
+  isAdmin: boolean
   login: (email: string, password: string) => Promise<void>
   register: (data: RegisterData) => Promise<void>
   logout: () => void
@@ -58,6 +60,7 @@ const AuthContext = createContext<AuthState>({
   token: null,
   guestRole: null,
   loading: true,
+  isAdmin: false,
   login: async () => {},
   register: async () => {},
   logout: () => {},
@@ -108,9 +111,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Login ──
   const login = useCallback(async (email: string, password: string) => {
+    const gid = getGuestId()
     const res = await fetch(`${API}/api/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(gid ? { "X-Guest-ID": gid } : {}),
+      },
       body: JSON.stringify({ email, password }),
     })
     if (!res.ok) {
@@ -118,14 +125,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(err.detail || "Login failed")
     }
     const data = await res.json()
+    clearGuestId()
     persist(data.access_token, data.user)
   }, [])
 
   // ── Register ──
   const register = useCallback(async (body: RegisterData) => {
+    const gid = getGuestId()
     const res = await fetch(`${API}/api/auth/register`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(gid ? { "X-Guest-ID": gid } : {}),
+      },
       body: JSON.stringify(body),
     })
     if (!res.ok) {
@@ -133,6 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(err.detail || "Registration failed")
     }
     const data = await res.json()
+    clearGuestId()
     persist(data.access_token, data.user)
   }, [])
 
@@ -141,6 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     localStorage.removeItem(GUEST_ROLE_KEY)
+    clearGuestId()
     setToken(null)
     setUser(null)
     setGuestRoleState(null)
@@ -148,12 +162,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Guest mode ──
   const setGuestRole = useCallback((role: UserRole) => {
+    ensureGuestId()  // create guest_id on entering guest mode
     localStorage.setItem(GUEST_ROLE_KEY, role)
     setGuestRoleState(role)
   }, [])
 
+  const isAdmin = user?.role === "admin"
+
   return (
-    <AuthContext.Provider value={{ user, token, guestRole, loading, login, register, logout, setGuestRole }}>
+    <AuthContext.Provider value={{ user, token, guestRole, loading, isAdmin, login, register, logout, setGuestRole }}>
       {children}
     </AuthContext.Provider>
   )

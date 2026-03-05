@@ -1,10 +1,14 @@
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom"
 import { useAuth } from "@/store/auth"
+import { usePageTracking } from "@/hooks/usePageTracking"
 
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, guestRole, logout } = useAuth()
+
+  // Track page views for site analytics
+  usePageTracking()
 
   // Determine the correct "My Cases" link based on auth state
   const casesPath = user ? "/cases" : guestRole ? `/guest/${guestRole}` : "/cases"
@@ -64,6 +68,12 @@ export default function Layout() {
                   <span className="text-xs text-gray-500">
                     👤 Guest
                   </span>
+                  <button
+                    onClick={() => { logout(); navigate("/") }}
+                    className="text-xs px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-gray-600"
+                  >
+                    Exit Guest
+                  </button>
                   <Link
                     to="/login?mode=register"
                     className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
@@ -113,7 +123,7 @@ export default function Layout() {
                 <li><Link to="/individuals" className="text-gray-500 hover:text-blue-600 transition-colors">For Individuals</Link></li>
                 <li><Link to="/physicians" className="text-gray-500 hover:text-blue-600 transition-colors">For Physicians</Link></li>
                 <li><Link to="/companies" className="text-gray-500 hover:text-blue-600 transition-colors">For Companies</Link></li>
-                <li><Link to="/plans" className="text-gray-500 hover:text-blue-600 transition-colors">Compare Insurance Plans</Link></li>
+                <li><Link to="/insurance-plans" className="text-gray-500 hover:text-blue-600 transition-colors">Compare Insurance Plans</Link></li>
               </ul>
             </div>
 
@@ -133,9 +143,11 @@ export default function Layout() {
             <div>
               <h4 className="text-xs font-semibold text-gray-900 mb-3 uppercase tracking-wider">Admin</h4>
               <ul className="space-y-2 text-sm">
-                <li><Link to="/tools" className="text-gray-500 hover:text-blue-600 transition-colors">Internal Tools</Link></li>
-                <li><Link to="/analytics" className="text-gray-500 hover:text-blue-600 transition-colors">Analytics</Link></li>
-                <li><Link to="/site-maintenance" className="text-gray-500 hover:text-blue-600 transition-colors">Site Maintenance</Link></li>
+                <li><Link to="/admin/cases" className="text-gray-500 hover:text-blue-600 transition-colors">All Cases</Link></li>
+                <li><Link to="/admin/tools" className="text-gray-500 hover:text-blue-600 transition-colors">Internal Tools</Link></li>
+                <li><Link to="/admin/data-analytics" className="text-gray-500 hover:text-blue-600 transition-colors">Data Analytics</Link></li>
+                <li><Link to="/admin/site-analytics" className="text-gray-500 hover:text-blue-600 transition-colors">Site Analytics</Link></li>
+                <li><Link to="/admin/site-maintenance" className="text-gray-500 hover:text-blue-600 transition-colors">Site Maintenance</Link></li>
               </ul>
             </div>
           </div>

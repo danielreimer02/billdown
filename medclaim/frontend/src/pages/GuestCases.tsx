@@ -6,12 +6,18 @@
  * talks to backend without a token). This wrapper just adds context.
  */
 
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import Cases from "@/pages/Cases"
 import { useAuth } from "@/store/auth"
 
 export default function GuestCases() {
-  const { guestRole } = useAuth()
+  const { guestRole, logout } = useAuth()
+  const navigate = useNavigate()
+
+  function exitGuest() {
+    logout()          // clears guest role + any token from localStorage
+    navigate("/")     // back to home
+  }
 
   return (
     <div>
@@ -24,12 +30,20 @@ export default function GuestCases() {
             {guestRole === "individual" ? "Individual" : guestRole ?? "Guest"}
             {" · Cases are saved on the server but not linked to an account."}
           </p>
-          <Link
-            to="/login?mode=register"
-            className="text-xs font-medium text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1 rounded-lg hover:bg-amber-200 transition-colors shrink-0 ml-4"
-          >
-            Create Account to Save
-          </Link>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button
+              onClick={exitGuest}
+              className="text-xs font-medium text-gray-600 border border-gray-300 px-3 py-1 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              Exit Guest Mode
+            </button>
+            <Link
+              to="/login?mode=register"
+              className="text-xs font-medium text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1 rounded-lg hover:bg-amber-200 transition-colors"
+            >
+              Create Account to Save
+            </Link>
+          </div>
         </div>
       </div>
 
