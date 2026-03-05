@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────
+# Production override — use on the droplet alongside docker-compose.yml
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile deploy up -d --build
+#
+# This file adds:
+#   - HTTPS (port 443) with Let's Encrypt certs
+#   - SSL nginx config (replaces default)
+#   - Production environment variables
+#
+# Prerequisites on droplet:
+#   1. DNS pointed to droplet IP
+#   2. Run: certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com
+#   3. Then start with the command above
+# ─────────────────────────────────────────────────────────
+
+services:
+  frontend-deploy:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./frontend/nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro
+
+  backend-deploy:
+    environment:
+      - ENVIRONMENT=production
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
